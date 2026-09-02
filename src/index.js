@@ -10,7 +10,7 @@
  * rhythm-game-worker.js での判定/描画）は完全に共通。
  */
 
-import { Midy } from "https://cdn.jsdelivr.net/gh/marmooo/midy@0.6.2/dist/midy.min.js";
+import { Midy } from "https://cdn.jsdelivr.net/gh/marmooo/midy@0.6.4/dist/midy.min.js";
 import { Modal } from "https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/+esm";
 import {
   DIFFICULTIES,
@@ -62,6 +62,8 @@ const ICON_PLAY =
 // Config
 // ---------------------------------------------------------------------------
 
+const isIOS = /iP(ad|hone|od)/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const DEFAULT_CONFIG = {
   laneCount: 4,
   scrollSpeed: 500,
@@ -87,14 +89,50 @@ const DEFAULT_CONFIG = {
   // Canvas 解像度の上限（devicePixelRatio をこの値でキャップ）。
   // 既定 1 = 負荷を抑えて安定優先。高いほどシャープだがメモリ/GPU 負荷が増え、モバイルで不安定になりやすい。
   maxPixelRatio: 1,
+  // Midy の sample キャッシュ粒度。none → ads → adsr → note → segment → chunk。
+  // 高いほど複雑な MIDI で効率が良いが、iOS の OfflineAudioContext 不具合で落ちやすくなる。
+  cacheMode: isIOS ? "none" : "chunk",
 };
+
+// midy.cacheMode の段階（スライダー 0–5 と対応）
+const CACHE_MODES = ["none", "ads", "adsr", "note", "segment", "chunk"];
+
+function cacheModeIndex(mode) {
+  const i = CACHE_MODES.indexOf(mode);
+  return i >= 0 ? i : CACHE_MODES.indexOf("chunk");
+}
+
+function cacheModeLabel(modeOrIndex) {
+  const i = typeof modeOrIndex === "number"
+    ? modeOrIndex
+    : cacheModeIndex(modeOrIndex);
+  const clamped = Math.min(CACHE_MODES.length - 1, Math.max(0, i));
+  return `${clamped} (${CACHE_MODES[clamped]})`;
+}
 
 function loadConfig() {
   try {
-    return {
+    const loaded = {
       ...DEFAULT_CONFIG,
-      ...JSON.parse(localStorage.getItem("FlipFlapNotesConfig") || "{}"),
+      ...JSON.parse(localStorage.getItem("TipTapNotesConfig") || "{}"),
     };
+    // 過去の不具合で laneKeys: [] が保存されている場合にキーコンフィグが
+    // 全滅しないよう、空・不足分は既定値で補完する。
+    if (!Array.isArray(loaded.laneKeys) || loaded.laneKeys.length === 0) {
+      loaded.laneKeys = [...DEFAULT_CONFIG.laneKeys];
+    } else {
+      const keys = [];
+      for (let i = 0; i < DEFAULT_CONFIG.laneKeys.length; i++) {
+        const k = loaded.laneKeys[i];
+        keys.push(
+          (typeof k === "string" && k.trim())
+            ? k.trim().toLowerCase()
+            : DEFAULT_CONFIG.laneKeys[i],
+        );
+      }
+      loaded.laneKeys = keys;
+    }
+    return loaded;
   } catch (err) {
     console.warn("Failed to load saved config, falling back to defaults:", err);
     return { ...DEFAULT_CONFIG };
@@ -116,6 +154,9 @@ let config = loadConfig();
 {
   const v = Number(config.maxPixelRatio);
   config.maxPixelRatio = Number.isFinite(v) ? Math.min(3, Math.max(1, v)) : 1;
+  if (!CACHE_MODES.includes(config.cacheMode)) {
+    config.cacheMode = DEFAULT_CONFIG.cacheMode;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +186,26 @@ const screenResult = document.getElementById("screenResult");
 const screenSettings = document.getElementById("screenSettings");
 const pauseOverlay = document.getElementById("pauseOverlay");
 const btnPause = document.getElementById("btnPause");
+const scoreDisplay = document.getElementById("scoreDisplay");
 const player = document.getElementById("player"); // 音声モード用 <audio>
+
+// btnPause と scoreDisplay は常に同じタイミングで表示/非表示になる
+// （#hudStack 内で並んで表示される一組の HUD のため）ので、まとめて操作する。
+// scoreDisplay は「HTML が古いまま（キャッシュ等）で #hudStack 側の変更が
+// 反映されていない」場合に null になり得るため、その場合も他のUIが落ちない
+// よう optional chaining で防御する。
+function showPlayHud() {
+  pauseOverlay.classList.add("hidden");
+  btnPause.classList.remove("hidden");
+  btnPause.innerHTML = ICON_PAUSE;
+  scoreDisplay?.classList.remove("hidden");
+  if (scoreDisplay) scoreDisplay.textContent = "0000000";
+}
+function hidePlayHud() {
+  pauseOverlay.classList.add("hidden");
+  btnPause.classList.add("hidden");
+  scoreDisplay?.classList.add("hidden");
+}
 
 // MIDI / SoundFont ライブラリ、設定画面はすべて Bootstrap の modal で表示する
 const libraryModal = Modal.getOrCreateInstance(
@@ -155,6 +215,13 @@ const soundFontModal = Modal.getOrCreateInstance(
   document.getElementById("soundFontLibraryModal"),
 );
 const settingsModal = Modal.getOrCreateInstance(screenSettings);
+// 結果画面はスコア確定後の一時停止的な画面のため、背景クリックや Esc で
+// 誤って閉じてしまわないよう backdrop: "static" / keyboard: false にする
+// （閉じるには Play again / Random MIDI / Back to start screen のいずれかを押す）。
+const resultModal = Modal.getOrCreateInstance(screenResult, {
+  backdrop: "static",
+  keyboard: false,
+});
 const htmlLang = document.documentElement.lang || "en";
 
 // ---------------------------------------------------------------------------
@@ -235,9 +302,10 @@ function setWrapHeight() {
   // 高さからは差し引かない（iPhone SE の横置きのような縦が狭い端末でも
   // canvas を画面いっぱいに使えるようにするため）。
   // ただし #topnav のブランドロゴ／ボタンは canvas と同じ左上・右上の
-  // コーナーに重なって浮いているため、btnPause やスコア表示など
-  // canvas 側の左右上隅の UI 要素はこの高さぶんだけ避けてやる必要がある。
-  // その受け渡し用に --topbar-h を CSS 変数として置いておく。
+  // コーナーに重なって浮いているため、#hudStack（pause/attribution/score）は
+  // この高さぶんだけ避けてやる必要がある。その受け渡し用に --topbar-h を
+  // CSS 変数として置いておく（#hudStack 自身の縦積み/横並びの切り替えは
+  // CSS Grid のメディアクエリ側で完結しており、ここでは関与しない）。
   const topbarH = document.getElementById("topnav")?.offsetHeight ?? 0;
   document.documentElement.style.setProperty("--topbar-h", topbarH + "px");
 
@@ -251,8 +319,6 @@ function setWrapHeight() {
   // 「プレイ中と同じ画面いっぱいのサイズ」（フッター分だけ差し引く）に固定する。
   canvasWrap.style.height = Math.max(300, globalThis.innerHeight - footerH) +
     "px";
-  // 狭い画面では attribution の高さぶん pause / スコアを下げる（--attr-h）
-  syncAttributionStackHeight();
   resizeCanvases();
 }
 globalThis.addEventListener("resize", setWrapHeight);
@@ -313,7 +379,12 @@ function currentGameTime() {
   if (mode === "midi") {
     const now = performance.now();
     const approx = _resumeBaseGameTime + (now - _resumeBasePerf) / 1000;
+    if (isPaused) return _pausedAt;
     if (now < _resumeStabilizeMinUntil) {
+      return approx;
+    }
+    // UI 再生中だが midy がまだ pause のときだけ壁時計（startDelay 中は isPaused=false かつ midy 再生中）
+    if (midy.isPaused && _resumeBasePerf > 0) {
       return approx;
     }
     const real = midy.currentTime() - START_DELAY;
@@ -321,12 +392,10 @@ function currentGameTime() {
       now < _resumeStabilizeMaxUntil &&
       Math.abs(real - approx) > RESUME_STABILIZE_TOLERANCE_SEC
     ) {
-      return approx; // 実測値がまだ近似値と乖離＝startTime未確定とみなす
+      return approx;
     }
     return real;
   }
-  // 音声モード: リードイン中は壁時計で -START_DELAY → 0 を進め、
-  // 再生開始後は <audio> の再生位置をそのまま使う（ノート時刻と一致）。
   if (_audioLeadIn) {
     if (isPaused) return _pausedAt;
     return (performance.now() - _audioLeadInStartPerf) / 1000 - START_DELAY;
@@ -339,34 +408,16 @@ function currentGameTime() {
 // ---------------------------------------------------------------------------
 
 // #topnav は canvas の上に浮く透過オーバーレイのため、rhythm-game-worker.js
-// 側で右上 HUD（スコア等）を描くときに、navbar の高さぶんだけ避けないと
-// 🌓（ダークモード切替）ボタンと重なってしまう。canvas は dpr 込みの
-// 座標系なので dpr を掛けて渡す。
-// 狭い画面で attribution を pause/スコアの上に積むときは --attr-h も加算する。
+// 側で canvas 中央の combo 表示を描くときに、#hudStack（pause/attribution/
+// score。score は現在 DOM 表示なので実体は pause+attribution）の高さぶんだけ
+// 避けないと重なってしまう。#hudStack は幅広画面では横並び1行、狭い/低い
+// 画面では attribution が上に乗って2行になる（CSS Grid のメディアクエリで
+// 自動切り替え）ため、実際のレイアウト後の高さを直接測る。
+// canvas は dpr 込みの座標系なので dpr を掛けて渡す。
 function computeTopInset() {
   const topbarH = document.getElementById("topnav")?.offsetHeight ?? 0;
-  const attrH = Number.parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue("--attr-h"),
-  ) || 0;
-  return Math.round((topbarH + attrH) * dpr);
-}
-
-/** 狭い画面で attribution 表示中だけ、その高さぶん pause / HUD を下げる。
- *  --attr-h を更新するだけ。Worker への反映は resizeCanvases() 側。 */
-function syncAttributionStackHeight() {
-  const root = document.getElementById("trackAttribution");
-  const narrow = globalThis.matchMedia(
-    "(max-width: 576px), (max-height: 420px)",
-  ).matches;
-  let attrH = 0;
-  if (
-    narrow && root && !root.classList.contains("hidden") &&
-    root.offsetParent !== null
-  ) {
-    // attribution 本体 + わずかな隙間
-    attrH = Math.ceil(root.getBoundingClientRect().height) + 4;
-  }
-  document.documentElement.style.setProperty("--attr-h", attrH + "px");
+  const hudStackH = document.getElementById("hudStack")?.offsetHeight ?? 0;
+  return Math.round((topbarH + hudStackH) * dpr);
 }
 
 function buildWorkerOptions() {
@@ -407,6 +458,15 @@ function buildWorkerOptions() {
 // HUD文字の土台色として使われる。
 function computeUiColor() {
   return getComputedStyle(document.body).color || "#ffffff";
+}
+
+// #scoreDisplay（DOM）を Canvas HUD と同じ色ロジックで塗るための橋渡し。
+// rhythm-game.js の drawHUD が使う「accentColor || uiColor」の優先順位に合わせる。
+function syncScoreColor() {
+  document.documentElement.style.setProperty(
+    "--score-color",
+    config.accentColor || computeUiColor(),
+  );
 }
 
 function initWorker() {
@@ -452,6 +512,7 @@ function initWorker() {
   const particleOff = particleCanvas.transferControlToOffscreen();
   const uiOff = uiCanvas.transferControlToOffscreen();
 
+  syncScoreColor(); // Canvas HUD（accentColor||uiColor）と #scoreDisplay の色を揃える
   worker.postMessage(
     {
       type: "init",
@@ -504,6 +565,8 @@ function onWorkerMessage(e) {
       // maxDuration 有限（実尺 > SHORT の SHORT）:
       //   120s 強制終了用のフェードへ。ノート消化が先に来た場合も同様。
       if (gamePhase !== "playing") break;
+      // ユーザー一時停止中の tick / midy.pause 由来の誤 ended でスコア画面に行かない
+      if (isPaused || userInitiatedMidiPause) break;
       if (maxDuration === Infinity) {
         stopRaf();
         showResult();
@@ -598,7 +661,7 @@ function applyNotes(forceResend = false) {
 // メインスレッドから Worker へ現在時刻を送り、SHORT終了判定も行う。
 // rAF（描画用）と setInterval（バックグラウンド耐性）の両方から呼ばれる。
 function gameLogicTick() {
-  if (gamePhase !== "playing" || isPaused) return;
+  if (gamePhase !== "playing" || isPaused || userInitiatedMidiPause) return;
   const t = currentGameTime();
   try {
     worker?.postMessage({ type: "tick", currentTime: t });
@@ -612,6 +675,12 @@ function startRaf() {
   if (rafId !== null) return;
   function loop() {
     gameLogicTick();
+    // スコアは "judgment" メッセージで lastResult.score に随時反映されるが、
+    // DOM 表示（#scoreDisplay）への書き戻しは毎フレームここでまとめて行う
+    // （以前は Canvas 側で毎フレーム再描画していたのと同じ頻度・同じ場所）。
+    if (scoreDisplay) {
+      scoreDisplay.textContent = String(lastResult.score).padStart(7, "0");
+    }
     // handleShortEnding() が showResult()→stopRaf() を呼んで rafId を null に
     // していたら、ここで再度スケジュールしてしまわないようにする。
     if (rafId !== null) rafId = requestAnimationFrame(loop);
@@ -756,19 +825,17 @@ function beginPlayback() {
       screenStart,
       screenReady,
       screenAnalyzing,
-      screenResult,
     ]
   ) {
     s.classList.add("hidden");
   }
+  resultModal.hide();
   libraryModal.hide();
   soundFontModal.hide();
   settingsModal.hide();
   userInitiatedMidiPause = false;
   isPaused = false;
-  pauseOverlay.classList.add("hidden");
-  btnPause.classList.remove("hidden");
-  btnPause.innerHTML = ICON_PAUSE;
+  showPlayHud();
   setWrapHeight(); // gamePhase="playing" になったので、ここでキャンバスを画面いっぱいに広げる
   updateTrackAttributionUI();
   startRaf();
@@ -797,6 +864,10 @@ function applyConfigToGame(cfg) {
   config = cfg;
   // maxPixelRatio 変更時は実効 dpr を更新（構造変更時は後続の buildGame で反映）
   if (dprChanged) dpr = computeDpr();
+  // MIDI サンプルキャッシュ粒度（再生中でも次回ボイス生成から効く）
+  if (typeof midy !== "undefined" && CACHE_MODES.includes(config.cacheMode)) {
+    midy.cacheMode = config.cacheMode;
+  }
 
   if (mode === "audio" && laneOrDiffChanged) {
     // 音声モードは難易度/レーン数がビートマップ生成自体に影響するため、
@@ -824,6 +895,7 @@ function applyConfigToGame(cfg) {
       gamePhase = "playing";
     } else {
       // 色・オフセット等のみ：既存 Worker にパッチを送るだけ（Canvas 再確保しない）
+      syncScoreColor();
       worker?.postMessage({
         type: "updateOptions",
         patch: {
@@ -844,6 +916,7 @@ function applyConfigToGame(cfg) {
     if (!worker || structuralChanged || laneOrDiffChanged) {
       buildGame();
     } else {
+      syncScoreColor();
       worker.postMessage({
         type: "updateOptions",
         patch: {
@@ -886,13 +959,16 @@ function showScreen(name) {
   screenStart.classList.toggle("hidden", name !== "start");
   screenReady.classList.toggle("hidden", name !== "ready");
   screenAnalyzing.classList.toggle("hidden", name !== "analyzing");
-  screenResult.classList.toggle("hidden", name !== "result");
+  if (name === "result") {
+    resultModal.show();
+  } else {
+    resultModal.hide();
+  }
   settingsModal.hide();
   libraryModal.hide();
   soundFontModal.hide();
   isPaused = false;
-  pauseOverlay.classList.add("hidden");
-  btnPause.classList.add("hidden");
+  hidePlayHud();
   setWrapHeight(); // gamePhase が変わったので、フルスクリーン⇄通常レイアウトを再計算する
   updateTrackAttributionUI();
 }
@@ -914,8 +990,7 @@ function showResult() {
   }
   gamePhase = "result";
   isPaused = false;
-  pauseOverlay.classList.add("hidden");
-  btnPause.classList.add("hidden");
+  hidePlayHud();
   setWrapHeight(); // フルスクリーン表示から通常レイアウトに戻す
 
   const judged = lastResult.perfect + lastResult.great + lastResult.good +
@@ -954,6 +1029,12 @@ function showResult() {
   document.getElementById("rGreat").textContent = lastResult.great;
   document.getElementById("rGood").textContent = lastResult.good;
   document.getElementById("rMiss").textContent = lastResult.miss;
+  const rDiff = document.getElementById("rDifficulty");
+  const rLanes = document.getElementById("rLanes");
+  const rScroll = document.getElementById("rScrollSpeed");
+  if (rDiff) rDiff.textContent = config.difficulty;
+  if (rLanes) rLanes.textContent = String(config.laneCount);
+  if (rScroll) rScroll.textContent = String(config.scrollSpeed);
 
   showScreen("result");
 }
@@ -1030,6 +1111,28 @@ document.querySelectorAll("#playLengthToggle input[data-length]").forEach(
 // ---------------------------------------------------------------------------
 
 let configSnapshot = null;
+// 設定パネルを開いてから実際にユーザーが値を変えたかどうか。
+// 何も触らずに閉じたときは localStorage へ書き戻さない（不要な保存と、
+// 途中で壊れた値が確定するのを防ぐ）。
+let settingsDirty = false;
+
+function readLaneKeysFromUI() {
+  // HTML ミニファイで type="text" が落ちるため input[type=text] は使わない。
+  const inputs = [
+    ...document.querySelectorAll("#laneKeyInputs input"),
+  ];
+  const keys = [];
+  for (let i = 0; i < DEFAULT_CONFIG.laneKeys.length; i++) {
+    const typed = (inputs[i]?.value ?? "").trim().toLowerCase();
+    keys.push(
+      typed ||
+        String(config.laneKeys[i] || "").toLowerCase() ||
+        DEFAULT_CONFIG.laneKeys[i] ||
+        String(i + 1),
+    );
+  }
+  return keys;
+}
 
 function readSettingsUI() {
   const gv = (id) => document.getElementById(id)?.value ?? "";
@@ -1041,8 +1144,7 @@ function readSettingsUI() {
     ...config,
     laneCount: parseInt(gv("laneCount"), 10) || 4,
     scrollSpeed: parseInt(gv("scrollSpeed"), 10) || 500,
-    laneKeys: [...document.querySelectorAll("#laneKeyInputs input[type=text]")]
-      .map((i) => i.value.trim()).filter(Boolean),
+    laneKeys: readLaneKeysFromUI(),
     laneColors: colors,
     // accentColor 用の <input type=color> は常に何らかの16進値を持ってしまう
     // （空値を表現できない）ため、ユーザーが実際に触った場合だけ値を採用し、
@@ -1070,11 +1172,24 @@ function readSettingsUI() {
     maxPixelRatio: parseFloat(
       document.getElementById("maxPixelRatio")?.value ?? "1",
     ) || 1,
+    cacheMode: CACHE_MODES[
+      Math.min(
+        CACHE_MODES.length - 1,
+        Math.max(0, parseInt(gv("cacheMode"), 10) || 0),
+      )
+    ],
   };
 }
 
 function openSettings() {
-  configSnapshot = { ...config, laneColors: [...config.laneColors] };
+  // laneKeys / laneColors は参照共有だとプレビュー中の書き換えで
+  // スナップショットまで汚染されるため、配列はコピーする。
+  configSnapshot = {
+    ...config,
+    laneKeys: [...config.laneKeys],
+    laneColors: [...config.laneColors],
+  };
+  settingsDirty = false;
   // 前回の未確定プレビューが残らないようにする
   pendingBackground = null;
 
@@ -1092,6 +1207,11 @@ function openSettings() {
   st("scrollSpeedVal", config.scrollSpeed);
   sv("maxPixelRatio", config.maxPixelRatio ?? 1);
   st("maxPixelRatioVal", config.maxPixelRatio ?? 1);
+  {
+    const idx = cacheModeIndex(config.cacheMode);
+    sv("cacheMode", idx);
+    st("cacheModeVal", cacheModeLabel(idx));
+  }
   sv("difficulty", config.difficulty);
   const persEl = document.getElementById("perspectiveEnabled");
   if (persEl) persEl.checked = config.perspectiveEnabled ?? true;
@@ -1134,7 +1254,7 @@ function openSettings() {
   );
 
   const keyInputs = document.querySelectorAll(
-    "#laneKeyInputs input[type=text]",
+    "#laneKeyInputs input",
   );
   for (let l = 0; l < keyInputs.length; l++) {
     keyInputs[l].value = config.laneKeys[l] ?? "";
@@ -1148,12 +1268,17 @@ function openSettings() {
       DEFAULT_CONFIG.laneColors[l % DEFAULT_CONFIG.laneColors.length];
   }
 
+  // 値の代入で input/change が飛ぶ環境向けに、UI 反映後にもう一度クリアする
+  settingsDirty = false;
   showScreen("settings");
 }
 
 function onSettingsInput() {
+  settingsDirty = true;
   applyConfigToGame(readSettingsUI());
-  saveConfig(config);
+  // プレビュー用にメモリ上の config は更新するが、localStorage への確定保存は
+  // 「適用して閉じる」時のみ行う。キャンセルで閉じたときに空の laneKeys などが
+  // 永続化されるのを防ぐ。
 }
 
 function applySettings() {
@@ -1162,6 +1287,7 @@ function applySettings() {
   commitPendingBackground();
   saveConfig(config);
   configSnapshot = null; // 適用済みなので hide.bs.modal 側の巻き戻しを無効化
+  settingsDirty = false;
   settingsModal.hide();
 }
 
@@ -1171,12 +1297,16 @@ function applySettings() {
 // （適用時は applySettings() が configSnapshot を先に null にしているので二重には走らない）
 screenSettings.addEventListener("hide.bs.modal", () => {
   if (configSnapshot) {
-    applyConfigToGame(configSnapshot);
-    saveConfig(configSnapshot);
-    // 背景プレビューもスナップショット時点の表示へ戻す（config 文字列だけでなく
-    // 実際の画像/動画と <select> の選択状態も巻き戻す）
-    revertPendingBackground(configSnapshot.backgroundPreset ?? "");
+    if (settingsDirty) {
+      // ライブプレビューで書き換えた config をスナップショットへ戻し、
+      // 触る前の値を localStorage にも書き戻す。
+      applyConfigToGame(configSnapshot);
+      saveConfig(configSnapshot);
+      revertPendingBackground(configSnapshot.backgroundPreset ?? "");
+    }
+    // 何も変更していない場合はメモリも storage も触らない
     configSnapshot = null;
+    settingsDirty = false;
   }
 });
 
@@ -1191,8 +1321,8 @@ document.getElementById("accentColor")?.addEventListener("input", (e) => {
 document.getElementById("btnResetAccentColor")?.addEventListener(
   "click",
   () => {
+    settingsDirty = true;
     applyConfigToGame({ ...readSettingsUI(), accentColor: "" });
-    saveConfig(config);
     const acEl = document.getElementById("accentColor");
     if (acEl) {
       acEl.value = rgbToHex(getComputedStyle(document.body).color) || "#ffc107";
@@ -1208,8 +1338,8 @@ document.getElementById("judgeLineColor")?.addEventListener("input", (e) => {
 document.getElementById("btnResetJudgeLineColor")?.addEventListener(
   "click",
   () => {
+    settingsDirty = true;
     applyConfigToGame({ ...readSettingsUI(), judgeLineColor: "" });
-    saveConfig(config);
     const jlEl = document.getElementById("judgeLineColor");
     if (jlEl) {
       jlEl.value = rgbToHex(getComputedStyle(document.body).color) || "#ffffff";
@@ -1225,8 +1355,8 @@ document.getElementById("laneLineColor")?.addEventListener("input", (e) => {
 document.getElementById("btnResetLaneLineColor")?.addEventListener(
   "click",
   () => {
+    settingsDirty = true;
     applyConfigToGame({ ...readSettingsUI(), laneLineColor: "" });
-    saveConfig(config);
     const llEl = document.getElementById("laneLineColor");
     if (llEl) {
       llEl.value = rgbToHex(getComputedStyle(document.body).color) || "#ffffff";
@@ -1253,6 +1383,10 @@ document.getElementById("btnResetLaneLineColor")?.addEventListener(
     }
   });
 });
+document.getElementById("cacheMode")?.addEventListener("input", (e) => {
+  const el = document.getElementById("cacheModeVal");
+  if (el) el.textContent = cacheModeLabel(parseInt(e.target.value, 10) || 0);
+});
 
 function goToStartScreen() {
   if (gamePhase === "playing") stopRaf();
@@ -1272,11 +1406,11 @@ document.getElementById("btnSettings").addEventListener("click", openSettings);
 // レーンキー入力は静的な8個をまとめて委譲で処理（1文字入力→次の欄へフォーカス移動）
 document.getElementById("laneKeyInputs").addEventListener("keydown", (e) => {
   const inp = e.target;
-  if (inp.tagName !== "INPUT" || e.key.length !== 1) return;
+  if (!(inp instanceof HTMLInputElement) || e.key.length !== 1) return;
   e.preventDefault();
-  inp.value = e.key;
+  inp.value = e.key.toLowerCase();
   const inputs = [
-    ...document.querySelectorAll("#laneKeyInputs input[type=text]"),
+    ...document.querySelectorAll("#laneKeyInputs input"),
   ];
   const next = inputs[inputs.indexOf(inp) + 1];
   if (next) next.focus();
@@ -1285,6 +1419,29 @@ document.getElementById("laneKeyInputs").addEventListener("keydown", (e) => {
 document.getElementById("btnApplySettings").addEventListener(
   "click",
   applySettings,
+);
+
+// 設定のリセット: localStorage の config / テーマと、IndexedDB（背景ファイル）を
+// まるごと消してリロードする。個別キーの削除ではなく deleteDatabase() で
+// データベースごと消すことで、将来 store が増えても取りこぼさないようにする。
+document.getElementById("btnResetAllSettings")?.addEventListener(
+  "click",
+  async () => {
+    localStorage.removeItem("TipTapNotesConfig");
+    localStorage.removeItem("darkMode");
+    try {
+      await new Promise((resolve, reject) => {
+        const req = indexedDB.deleteDatabase(BG_DB_NAME);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+        // 他タブでDBが開いたままだと即座には消えないが、リロード自体は続行する
+        req.onblocked = () => resolve();
+      });
+    } catch (err) {
+      console.error("IndexedDB のリセットに失敗:", err);
+    }
+    location.reload();
+  },
 );
 
 // ---------------------------------------------------------------------------
@@ -1311,6 +1468,7 @@ document.getElementById("toggleDarkMode").addEventListener("click", () => {
   // ゲーム進行中でもレーン区切り線・判定ライン・HUD文字が見えなくならないよう、
   // 稼働中の worker にも新しいテーマ文字色を反映する
   // （rhythm-game-worker.js の "updateOptions" は msg.patch を読む契約なので合わせる）。
+  syncScoreColor();
   worker?.postMessage({
     type: "updateOptions",
     patch: { uiColor: computeUiColor() },
@@ -1342,7 +1500,9 @@ document.addEventListener("keydown", (e) => {
   if (pressedKeys.has(key)) return;
   pressedKeys.add(key);
   if (gamePhase !== "playing" || isPaused) return;
-  const lane = config.laneKeys.indexOf(key);
+  const lane = config.laneKeys.findIndex(
+    (k) => String(k || "").toLowerCase() === key,
+  );
   if (lane >= 0) {
     worker?.postMessage({
       type: "pressLane",
@@ -1355,7 +1515,9 @@ document.addEventListener("keyup", (e) => {
   const key = e.key.toLowerCase();
   pressedKeys.delete(key);
   if (gamePhase !== "playing" || isPaused) return;
-  const lane = config.laneKeys.indexOf(key);
+  const lane = config.laneKeys.findIndex(
+    (k) => String(k || "").toLowerCase() === key,
+  );
   if (lane >= 0) worker?.postMessage({ type: "releaseLane", lane });
 }, { capture: true });
 
@@ -1434,52 +1596,162 @@ function scheduleAudioLeadInEnd(remainingSec) {
   }, ms);
 }
 
-function togglePause() {
-  if (gamePhase !== "playing") return;
+// ---------------------------------------------------------------------------
+// iOS 背面 + ポーズ安全化
+// 曲切り替え後などに midy の状態がずれていると、pause 時の tick/stopped が
+// 「曲終了」扱いになりスコア画面へ飛ぶ。ユーザーポーズでは isPaused を先に立て、
+// ended/stopped を無視する。
+// ---------------------------------------------------------------------------
+
+let resumeGuardUntil = 0;
+
+function kickAudioContextSync() {
+  if (!audioContext) return;
+  try {
+    const p = audioContext.resume();
+    if (p && typeof p.catch === "function") {
+      p.catch((err) => console.error("audioContext.resume failed:", err));
+    }
+  } catch (err) {
+    console.error("audioContext.resume failed:", err);
+  }
+}
+
+function pauseForBackground() {
+  if (gamePhase !== "playing" || isPaused) return;
+  if (performance.now() < resumeGuardUntil) return;
+
+  try {
+    _pausedAt = currentGameTime();
+  } catch {
+    /* ignore */
+  }
+  stopRaf();
+  updatePauseUi(true);
+
+  if (mode === "midi") {
+    if (!midy.isPaused) {
+      try {
+        userInitiatedMidiPause = true;
+        midy.pause();
+      } catch (err) {
+        console.error("midy.pause on background failed:", err);
+        userInitiatedMidiPause = false;
+      }
+    }
+  } else if (mode === "audio") {
+    if (_audioLeadIn) {
+      if (_audioLeadInTimeoutId !== null) {
+        clearTimeout(_audioLeadInTimeoutId);
+        _audioLeadInTimeoutId = null;
+      }
+    } else if (!player.paused) {
+      try {
+        player.pause();
+      } catch (err) {
+        console.error("player.pause on background failed:", err);
+      }
+    }
+  }
+}
+
+function resumeFromPause() {
+  resumeGuardUntil = performance.now() + 2000;
+  userInitiatedMidiPause = false;
+
+  // 同期で AudioContext を起こす（iOS はジェスチャ内 resume が必須）
+  kickAudioContextSync();
+
+  _resumeBaseGameTime = _pausedAt;
+  _resumeBasePerf = performance.now();
+  _resumeStabilizeMinUntil = _resumeBasePerf + RESUME_STABILIZE_MIN_MS;
+  _resumeStabilizeMaxUntil = _resumeBasePerf + RESUME_STABILIZE_MAX_MS;
+
+  updatePauseUi(false);
+  startRaf();
+
   if (mode === "midi") {
     try {
       if (midy.isPaused) {
         const result = midy.resume();
-        if (result && typeof result.catch === "function") {
-          result.catch((err) => console.error("midy.resume failed:", err));
+        if (result && typeof result.then === "function") {
+          result.then(
+            () => {
+              _resumeBaseGameTime = currentGameTime();
+              _resumeBasePerf = performance.now();
+              _resumeStabilizeMinUntil = _resumeBasePerf +
+                RESUME_STABILIZE_MIN_MS;
+              _resumeStabilizeMaxUntil = _resumeBasePerf +
+                RESUME_STABILIZE_MAX_MS;
+            },
+            (err) => console.error("midy.resume failed:", err),
+          );
         }
-      } else {
-        userInitiatedMidiPause = true;
+      }
+    } catch (err) {
+      console.error("midy.resume failed:", err);
+    }
+    kickAudioContextSync();
+    return;
+  }
+
+  if (mode === "audio") {
+    if (_audioLeadIn) {
+      _audioLeadInStartPerf = performance.now() -
+        (_pausedAt + START_DELAY) * 1000;
+      scheduleAudioLeadInEnd(Math.max(0, -_pausedAt));
+      return;
+    }
+    player.play().catch((err) => console.error("player.play failed:", err));
+  }
+}
+
+function togglePause() {
+  if (gamePhase !== "playing") return;
+
+  // UI の isPaused を正とする（midy.isPaused だけ見ると再開扱いになる事故を防ぐ）
+  if (isPaused) {
+    resumeFromPause();
+    return;
+  }
+
+  // ---- ユーザーポーズ: 先に isPaused を立ててから音源を止める ----
+  // midy.pause や worker tick が ended/stopped を発火してもスコア画面に行かない。
+  try {
+    _pausedAt = currentGameTime();
+  } catch {
+    _pausedAt = 0;
+  }
+  stopRaf();
+  updatePauseUi(true);
+
+  if (mode === "midi") {
+    try {
+      userInitiatedMidiPause = true;
+      if (!midy.isPaused) {
         midy.pause();
       }
     } catch (err) {
-      console.error("midy.pause/resume failed:", err);
+      console.error("midy.pause failed:", err);
       userInitiatedMidiPause = false;
     }
   } else if (mode === "audio") {
-    // リードイン中は <audio> がまだ動いていないので、壁時計ベースで一時停止/再開する。
     if (_audioLeadIn) {
-      if (isPaused) {
-        // 再開: 停止時点のゲーム時刻から残りリードインを再開
-        _audioLeadInStartPerf = performance.now() -
-          (_pausedAt + START_DELAY) * 1000;
-        updatePauseUi(false);
-        startRaf();
-        scheduleAudioLeadInEnd(Math.max(0, -_pausedAt));
-      } else {
-        _pausedAt = currentGameTime();
-        if (_audioLeadInTimeoutId !== null) {
-          clearTimeout(_audioLeadInTimeoutId);
-          _audioLeadInTimeoutId = null;
-        }
-        stopRaf();
-        updatePauseUi(true);
+      if (_audioLeadInTimeoutId !== null) {
+        clearTimeout(_audioLeadInTimeoutId);
+        _audioLeadInTimeoutId = null;
       }
       return;
     }
-    if (player.paused) {
-      player.play().catch((err) => console.error("player.play failed:", err));
-    } else {
+    if (!player.paused) {
       player.pause();
     }
   }
 }
-btnPause.addEventListener("click", togglePause);
+btnPause.addEventListener("click", (e) => {
+  e.stopPropagation();
+  togglePause();
+});
 
 // ---------------------------------------------------------------------------
 // モード切り替え
@@ -1541,7 +1813,9 @@ function switchMode(next) {
 
 const audioContext = new AudioContext();
 const midy = new Midy(audioContext);
-midy.cacheMode = "chunk";
+midy.cacheMode = CACHE_MODES.includes(config.cacheMode)
+  ? config.cacheMode
+  : "chunk";
 midy.startDelay = START_DELAY;
 
 const SOUNDFONT_BASE = "https://soundfonts.pages.dev/";
@@ -1835,7 +2109,9 @@ function updateTrackAttributionUI() {
   if (!meta) {
     titleEl.textContent = "";
     metaEl.innerHTML = "";
-    syncAttributionStackHeight();
+    // attribution の表示/非表示で #hudStack の高さが変わるので、combo が
+    // 重ならないよう topInset を再計算させる（縦積みの折返しは CSS Grid が
+    // 自動でやるので、ここでは resizeCanvases() だけでよい）。
     if (worker) resizeCanvases();
     return;
   }
@@ -1868,8 +2144,8 @@ function updateTrackAttributionUI() {
     }
   }
   metaEl.innerHTML = parts.join("");
-  // 表示後に高さを測って狭い画面の pause/スコア位置を更新し、HUD にも反映
-  syncAttributionStackHeight();
+  // 表示後に #hudStack の高さが変わるので、combo が重ならないよう
+  // topInset を再計算させる（縦積みの折返し自体は CSS Grid 側で完結する）。
   if (worker) resizeCanvases();
 }
 
@@ -1891,12 +2167,14 @@ function parseMidiLibraryTime(timeStr) {
 }
 
 const RANDOM_MIDI_MIN_SECONDS = 60;
+let randomMidiBusy = false;
 
 async function playRandomLongMidi() {
+  if (randomMidiBusy) return;
   const btn = document.getElementById("btnRandomMidi");
   const data = midiLibrary.fullData;
   if (!data || data.length === 0) {
-    alert("MIDI library is still loading. Please try again in a moment.");
+    alert(t("randomMidiStillLoading"));
     return;
   }
   const candidates = data.filter(
@@ -1904,13 +2182,14 @@ async function playRandomLongMidi() {
       row?.file && parseMidiLibraryTime(row.time) >= RANDOM_MIDI_MIN_SECONDS,
   );
   if (candidates.length === 0) {
-    alert("No songs longer than 1 minute found in the MIDI library.");
+    alert(t("randomMidiNoCandidates"));
     return;
   }
   const row = candidates[Math.floor(Math.random() * candidates.length)];
+  randomMidiBusy = true;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = "⏳ Loading…";
+    btn.textContent = t("randomMidiLoading");
   }
   try {
     const buf = await (await fetch(`https://midi-db.pages.dev/${row.file}`))
@@ -1918,11 +2197,12 @@ async function playRandomLongMidi() {
     await loadMIDIBytes(new Uint8Array(buf), trackMetaFromLibraryRow(row));
   } catch (err) {
     console.error("Random MIDI load failed:", err);
-    alert("Failed to load random MIDI: " + (err?.message || err));
+    alert(t("randomMidiLoadFailedPrefix") + (err?.message || err));
   } finally {
+    randomMidiBusy = false;
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "🎲 Random MIDI (≥1 min)";
+      btn.textContent = t("randomMidi");
     }
   }
 }
@@ -2004,20 +2284,30 @@ midy.addEventListener("paused", () => {
   const fromUser = userInitiatedMidiPause;
   userInitiatedMidiPause = false;
 
-  // ユーザー操作の一時停止だけ stopRaf + 一時停止 UI。
-  // システム pause（SHORT終了など）がリプレイ後に遅延到着しても、
-  // 新プレイの rAF を止めたり isPaused を立てたりしない。
+  if (performance.now() < resumeGuardUntil) return;
+
+  // ユーザー操作の一時停止。UI は togglePause 側で既に paused 済みのことが多い。
+  // ここでは tick の同期のみ（大きな時刻を送って ended にしないよう isPaused 中は worker ended を無視）。
   if (fromUser) {
     stopRaf();
-    _pausedAt = currentGameTime();
-    worker?.postMessage({ type: "tick", currentTime: _pausedAt });
     if (gamePhase === "playing") {
-      updatePauseUi(true);
+      if (!isPaused) {
+        try {
+          _pausedAt = currentGameTime();
+        } catch {
+          /* ignore */
+        }
+        updatePauseUi(true);
+      }
+      try {
+        worker?.postMessage({ type: "tick", currentTime: _pausedAt });
+      } catch (err) {
+        console.error("tick on pause failed:", err);
+      }
     }
     return;
   }
 
-  // システム pause: result 中なら先頭へ（completeShortEnding の then と二重でも安全）
   if (gamePhase === "result") {
     midy.seekTo(0);
     midy.setMasterVolume(1, audioContext.currentTime);
@@ -2033,6 +2323,8 @@ midy.addEventListener("resumed", () => {
     btnPause.classList.remove("hidden");
     btnPause.innerHTML = ICON_PAUSE;
   }
+  // resume なので scoreDisplay の文字はリセットしない（現在のスコアを保持したまま出す）
+  scoreDisplay?.classList.remove("hidden");
   if (gamePhase === "playing") {
     _resumeBaseGameTime = _pausedAt;
     _resumeBasePerf = performance.now();
@@ -2047,11 +2339,11 @@ midy.addEventListener("resumed", () => {
 midy.addEventListener("stopped", () => {
   if (mode !== "midi") return;
   worker?.postMessage({ type: "stop" });
+  // ユーザー一時停止中の誤 stopped ではスコア画面に行かない
+  if (isPaused || userInitiatedMidiPause) return;
   // プレイ中の自然終了:
   // - すでにフェード中なら setTimeout / completeShortEnding に完了を任せる
-  //   （バックグラウンドで rAF が止まっていてもタイムアウトで showResult される）
   // - 未フェードなら音楽は既に止まっているのでスコア画面へ。
-  //   systemPauseMidi() で paused に揃えておき、リプレイは seekTo(0)+resume。
   if (gamePhase === "playing") {
     if (endingFadeStarted) {
       return;
@@ -2260,9 +2552,7 @@ function beginAudioRound() {
     };
     worker?.postMessage({ type: "start" });
     isPaused = false;
-    pauseOverlay.classList.add("hidden");
-    btnPause.classList.remove("hidden");
-    btnPause.innerHTML = ICON_PAUSE;
+    showPlayHud();
     startRaf();
     uiCanvas.focus({ preventScroll: true });
   } else {
@@ -2322,6 +2612,7 @@ player.addEventListener("pause", () => {
     suppressPauseHandling = false;
     return;
   }
+  if (performance.now() < resumeGuardUntil) return;
   if (gamePhase === "playing") {
     stopRaf();
     updatePauseUi(true);
@@ -2340,24 +2631,43 @@ player.addEventListener("ended", () => {
 // 音声モードは beginAudioRound()（START_DELAY リードイン後に play）。
 // MIDIモードは startMidiPlayback()（split soundfont の読み込み → midy.start()）。
 
+// 連打で startMidiPlayback / analyzeThenPlay が並行起動しないようにする。
+// 成功時は gamePhase が "playing" に遷移するので再入は弾かれるが、
+// await 中はまだ ready/result のままなのでフラグが必要。
+let startOrReplayBusy = false;
+
 async function startOrReplay() {
+  if (startOrReplayBusy) return;
+  if (gamePhase !== "ready" && gamePhase !== "result") return;
+  startOrReplayBusy = true;
+  const startBtn = document.getElementById("btnBigStart");
+  const replayBtn = document.getElementById("btnBigReplay");
+  if (startBtn) startBtn.disabled = true;
+  if (replayBtn) replayBtn.disabled = true;
   try {
-    if (audioContext.state !== "running") await audioContext.resume();
-  } catch (err) {
-    console.error("audioContext.resume failed:", err);
-  }
-  if (mode === "audio") {
-    if (notesStale || !notesReady) {
-      await analyzeThenPlay();
-    } else {
-      beginAudioRound();
-    }
-  } else if (mode === "midi") {
     try {
-      await startMidiPlayback();
+      if (audioContext.state !== "running") await audioContext.resume();
     } catch (err) {
-      console.error("startMidiPlayback failed:", err);
+      console.error("audioContext.resume failed:", err);
     }
+    if (mode === "audio") {
+      if (notesStale || !notesReady) {
+        await analyzeThenPlay();
+      } else {
+        beginAudioRound();
+      }
+    } else if (mode === "midi") {
+      try {
+        await startMidiPlayback();
+      } catch (err) {
+        console.error("startMidiPlayback failed:", err);
+      }
+    }
+  } finally {
+    startOrReplayBusy = false;
+    // 遷移後は画面ごと隠れるので、戻ってきたときに押せるよう常に解除する
+    if (startBtn) startBtn.disabled = false;
+    if (replayBtn) replayBtn.disabled = false;
   }
 }
 
@@ -2613,20 +2923,32 @@ async function restoreBackground() {
 }
 
 // ---------------------------------------------------------------------------
-// タブの表示/非表示
-// バックグラウンドでは AudioContext が suspend されやすく、復帰時に resume しないと
-// MIDI の currentTime が進まない。また、表示に戻った瞬間に logic tick を1回走らせて
-// 終了判定を取りこぼさないようにする。
+// タブ / ブラウザ背面・前面
 // ---------------------------------------------------------------------------
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) return;
-  if (audioContext.state === "suspended") {
-    audioContext.resume().catch((err) =>
-      console.error("audioContext.resume on visibility failed:", err)
-    );
+  if (document.hidden) {
+    pauseForBackground();
+    return;
   }
+  kickAudioContextSync();
   if (gamePhase === "playing" && !isPaused) {
     gameLogicTick();
+  }
+});
+globalThis.addEventListener("pagehide", () => {
+  pauseForBackground();
+});
+globalThis.addEventListener("pageshow", () => {
+  kickAudioContextSync();
+});
+audioContext.addEventListener("statechange", () => {
+  if (performance.now() < resumeGuardUntil) return;
+  if (isPaused || gamePhase !== "playing") return;
+  if (
+    audioContext.state === "suspended" ||
+    audioContext.state === "interrupted"
+  ) {
+    kickAudioContextSync();
   }
 });
 

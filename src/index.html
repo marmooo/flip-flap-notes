@@ -111,20 +111,40 @@
       }
       #uiCanvas { pointer-events: auto; outline: none; }
 
-      /* Track attribution (title / composer / site / license) while ready/playing/result.
-         Always under #topnav (never above/into the navbar). On wide screens it shares
-         the pause/score row with side insets; on narrow screens it stacks above them
-         and --attr-h pushes pause + canvas HUD down (set in JS). */
-      #trackAttribution {
+      /* ===== HUD stack: pause button / track attribution / score =====
+         A single CSS Grid replaces the old absolute-position + JS height-sync
+         (--attr-h) approach. Grid's "auto" tracks size themselves to each
+         item's real rendered width/height, so pause and score never overlap
+         attribution regardless of font metrics (no rem guessing needed), and
+         no JS has to measure anything to keep them from colliding.
+         Wide screens: one row [pause | attribution (flexible) | score].
+         Narrow/short screens: attribution on its own full-width row above,
+         pause/score sharing the row below (media query only swaps the grid
+         template; no JS involved). */
+      #hudStack {
         position: absolute;
-        top: calc(var(--topbar-h, 48px) + 0.2rem);
-        left: 3.6rem;   /* ≈ pause button (2.4rem) + left:10px + gap */
-        right: 7.0rem;  /* score HUD (~7 digits + padding) */
+        top: var(--topbar-h, 48px);
+        left: 0.625rem;
+        right: 0.625rem;
         z-index: 6;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        grid-template-areas: "pause attr score";
+        align-items: start;
+        column-gap: 0.5rem;
+        pointer-events: none;
+      }
+      #hudStack > * { pointer-events: none; }
+      #btnPause { grid-area: pause; pointer-events: auto; }
+      #trackAttribution { grid-area: attr; }
+      #scoreDisplay { grid-area: score; }
+
+      #trackAttribution {
+        margin-top: 0.2rem;
         padding: 0.2rem 0.45rem;
         border-radius: 0.4rem;
         text-align: center;
-        pointer-events: none;
+        min-width: 0; /* allow the grid item to shrink below content width for ellipsis */
         background: color-mix(in srgb, var(--bs-body-bg) 38%, transparent);
         backdrop-filter: blur(4px);
         -webkit-backdrop-filter: blur(4px);
@@ -154,11 +174,33 @@
         content: " · ";
         opacity: 0.7;
       }
-      /* Narrow / short: full-width bar just under navbar; pause/score shift down via --attr-h */
+
+      /* Score HUD, formerly drawn on Canvas (ctx.fillText); now a DOM element so
+         the browser lays it out for real instead of us guessing its pixel width.
+         Same look as before: bold monospace, colored via --score-color (set from
+         JS to mirror rhythm-game.js's accentColor||uiColor), no glow (the canvas
+         version didn't glow the score either -- only combo does). */
+      #scoreDisplay {
+        margin-top: 0.2rem;
+        padding-right: 0.2rem;
+        font: bold 1.15rem/1.2 monospace;
+        color: var(--score-color, currentColor);
+        text-align: right;
+        white-space: nowrap;
+      }
+      #scoreDisplay.hidden { display: none !important; }
+
+      /* Narrow / short: attribution full-width on its own row; pause/score below it */
       @media (max-width: 576px), (max-height: 420px) {
+        #hudStack {
+          grid-template-columns: auto 1fr;
+          grid-template-rows: auto auto;
+          grid-template-areas:
+            "attr  attr"
+            "pause score";
+          row-gap: 0.3rem;
+        }
         #trackAttribution {
-          left: 0.5rem;
-          right: 0.5rem;
           padding: 0.15rem 0.4rem;
           background: color-mix(in srgb, var(--bs-body-bg) 32%, transparent);
         }
@@ -489,31 +531,36 @@
         <canvas id="particleCanvas" class="gameLayer"></canvas>
         <canvas id="uiCanvas"       class="gameLayer"></canvas>
 
-        <!-- Pause button top-left, symmetric with score (drawn on Canvas top-right).
-             Both MIDI and audio modes call togglePause() from this button
-             (MIDI mode uses midy.pause()/resume() internally).
-             #topnav is a transparent overlay on the same top-left corner, so without
-             offset the brand logo would steal the hit target.
-             Shift down by --topbar-h (set by setWrapHeight() in game.js).
-             SVG instead of emoji (⏸/▶) to avoid font/OS overflow or clipping on the
-             round button; fixed-size SVG. Actual swap is done by ICON_PAUSE / ICON_PLAY
-             via innerHTML in game.js. -->
-        <button id="btnPause" type="button" title="Space to pause/resume"
-                class="btn btn-sm btn-secondary rounded-circle hidden
-                       d-flex align-items-center justify-content-center"
-                style="position:absolute; top:calc(var(--topbar-h, 0px) + var(--attr-h, 0px));
-                       left:10px; z-index:5;
-                       width:2.4rem; height:2.4rem; padding:0;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
-               viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true">
-            <path d="M555-200v-560h175v560H555Zm-325 0v-560h175v560H230Z"></path>
-          </svg>
-        </button>
+        <!-- HUD stack: pause button, track attribution, score. Laid out together as a
+             CSS Grid (see #hudStack) so they never overlap and the narrow/wide reflow
+             is pure CSS -- no JS height sync needed. -->
+        <div id="hudStack">
+          <!-- Pause button. Both MIDI and audio modes call togglePause() from this
+               button (MIDI mode uses midy.pause()/resume() internally).
+               SVG instead of emoji (⏸/▶) to avoid font/OS overflow or clipping on the
+               round button; fixed-size SVG. Actual swap is done by ICON_PAUSE / ICON_PLAY
+               via innerHTML in game.js. -->
+          <button id="btnPause" type="button" title="Space to pause/resume"
+                  class="btn btn-sm btn-secondary rounded-circle hidden
+                         d-flex align-items-center justify-content-center"
+                  style="width:2.4rem; height:2.4rem; padding:0;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+                 viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true">
+              <path d="M555-200v-560h175v560H555Zm-325 0v-560h175v560H230Z"></path>
+            </svg>
+          </button>
 
-        <!-- Track attribution for MIDI library works (title / composer / site / license) -->
-        <div id="trackAttribution" class="small hidden" aria-live="polite">
-          <div id="trackAttrTitle"></div>
-          <div id="trackAttrMeta"></div>
+          <!-- Track attribution for MIDI library works (title / composer / site / license) -->
+          <div id="trackAttribution" class="small hidden" aria-live="polite">
+            <div id="trackAttrTitle"></div>
+            <div id="trackAttrMeta"></div>
+          </div>
+
+          <!-- Score HUD. Formerly drawn on the Canvas top-right corner
+               (rhythm-game.js #drawHUD); moved to DOM so the grid can size around
+               its real rendered width instead of us hard-coding an inset. Text is
+               kept in sync with lastResult.score from game.js's rAF loop. -->
+          <div id="scoreDisplay" class="hidden" aria-hidden="true">0000000</div>
         </div>
 
         <!-- Pause overlay (shown/hidden from btnPause only while playing) -->
@@ -637,272 +684,317 @@
         </div>
 
         <!-- Result screen -->
-        <div id="screenResult" class="overlay hidden">
-          <div class="card p-4 text-center border-secondary-subtle" style="min-width:270px;">
-            <div id="resultGrade" class="grade-badge mb-2"></div>
-            <h3 class="fw-bold mb-3 text-warning-emphasis">RESULT</h3>
-            <table id="resultTable" class="mx-auto mb-3 small">
-              <tr><td class="label">Score</td>    <td id="rScore"    class="text-end fw-bold"></td></tr>
-              <tr><td class="label">Accuracy</td> <td id="rAccuracy" class="text-end"></td></tr>
-              <tr><td class="label">Max Combo</td><td id="rCombo"    class="text-end"></td></tr>
-              <tr><td class="label">Perfect</td>  <td id="rPerfect"  class="text-end text-warning-emphasis"></td></tr>
-              <tr><td class="label">Great</td>    <td id="rGreat"    class="text-end text-success-emphasis"></td></tr>
-              <tr><td class="label">Good</td>     <td id="rGood"     class="text-end text-info-emphasis"></td></tr>
-              <tr><td class="label">Miss</td>     <td id="rMiss"     class="text-end text-danger-emphasis"></td></tr>
-            </table>
-            <button id="btnBigReplay" type="button"
-                    class="btn btn-primary rounded-pill fw-bold px-4 py-2">
-              ▶ Play again
-            </button>
-            <p class="small text-muted mt-2 mb-0">You can also replay with the Space key</p>
-            <div class="mt-3">
-              <button id="btnRandomMidi" type="button"
-                      class="btn btn-outline-info rounded-pill fw-bold px-3 py-2">
-                🎲 Random MIDI (≥1 min)
-              </button>
-              <p class="small text-muted mt-1 mb-0">Pick a random song over 1 minute from the MIDI library</p>
-            </div>
-            <div>
-              <button id="btnChangeFileResult" type="button"
-                      class="btn btn-sm btn-link text-muted mt-2">📂 Back to start screen</button>
+        <div class="modal" id="screenResult" tabindex="-1" aria-labelledby="screenResultLabel" aria-hidden="true">
+          <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+            <div class="modal-content text-center">
+              <div class="modal-header justify-content-center border-0 pb-0">
+                <div>
+                  <div id="resultGrade" class="grade-badge mb-1"></div>
+                  <h3 class="fw-bold mb-0 text-warning-emphasis" id="screenResultLabel">RESULT</h3>
+                </div>
+              </div>
+              <div class="modal-body pt-2">
+                <table id="resultTable" class="mx-auto mb-0 small">
+                  <tr><td class="label">Score</td>    <td id="rScore"    class="text-end fw-bold"></td></tr>
+                  <tr><td class="label">Accuracy</td> <td id="rAccuracy" class="text-end"></td></tr>
+                  <tr><td class="label">Max Combo</td><td id="rCombo"    class="text-end"></td></tr>
+                  <tr><td class="label">Perfect</td>  <td id="rPerfect"  class="text-end text-warning-emphasis"></td></tr>
+                  <tr><td class="label">Great</td>    <td id="rGreat"    class="text-end text-success-emphasis"></td></tr>
+                  <tr><td class="label">Good</td>     <td id="rGood"     class="text-end text-info-emphasis"></td></tr>
+                  <tr><td class="label">Miss</td>     <td id="rMiss"     class="text-end text-danger-emphasis"></td></tr>
+                  <tr><td class="label">Difficulty</td><td id="rDifficulty" class="text-end"></td></tr>
+                  <tr><td class="label">Lanes</td>   <td id="rLanes"     class="text-end"></td></tr>
+                  <tr><td class="label">Scroll</td>  <td id="rScrollSpeed" class="text-end"></td></tr>
+                </table>
+              </div>
+              <div class="modal-footer flex-column border-0 pt-0">
+                <div class="d-flex gap-1 justify-content-center">
+                  <div class="w-50">
+                    <button id="btnBigReplay" type="button"
+                            class="btn btn-primary rounded-pill fw-bold w-100">
+                      ▶ Play again
+                    </button>
+                    <p class="small text-muted mt-1 mb-0 d-none d-md-block">
+                      You can also replay with the Space key
+                    </p>
+                  </div>
+                  <div class="w-50">
+                    <button id="btnRandomMidi" type="button"
+                            class="btn btn-outline-info rounded-pill fw-bold w-100">
+                      🎲 Random MIDI
+                    </button>
+                    <p class="small text-muted mt-1 mb-0 d-none d-md-block">
+                      Pick a random song over 1 minute from the MIDI library
+                    </p>
+                  </div>
+                </div>
+                <button id="btnChangeFileResult" type="button"
+                        class="btn btn-sm btn-link text-muted">📂 Back to start screen</button>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- Settings (Bootstrap modal) -->
+        <!-- Settings -->
         <div class="modal" id="screenSettings" tabindex="-1"
-             aria-labelledby="screenSettingsLabel" aria-hidden="true">
+                                               aria-labelledby="screenSettingsLabel" aria-hidden="true">
           <div class="modal-dialog modal-dialog-scrollable">
             <div class="modal-content" id="settingsPanel">
 
               <div class="modal-header">
                 <h5 class="modal-title fw-bold text-warning-emphasis" id="screenSettingsLabel">⚙ Settings</h5>
                 <button type="button" class="btn-close" id="btnCloseSettings"
-                        data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
 
               <div class="modal-body" id="settingsBody">
 
-            <div class="mb-3">
-              <label class="form-label">Difficulty</label>
-              <select class="form-select form-select-sm" id="difficulty">
-                <option value="EASY">EASY — ≈1–1.5 nps, no chords (beginners)</option>
-                <option value="BASIC">BASIC — ≈2–3 nps, max 2 simultaneous (novice)</option>
-                <option value="NORMAL" selected>NORMAL — ≈3–4 nps, max 2 simultaneous (casual)</option>
-                <option value="HARD">HARD — ≈4–6 nps, max 3 simultaneous (experienced)</option>
-                <option value="EXPERT">EXPERT — ≈6–9 nps, max 4 simultaneous (advanced)</option>
-              </select>
-              <div class="small text-muted mt-1">
-                ※ Simultaneous notes are automatically limited when lane count is low<br>
-                <span id="audioDiffNote" class="hidden">※ In audio mode, changing difficulty regenerates the chart on the next play.</span>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label">Difficulty</label>
+                  <select class="form-select form-select-sm" id="difficulty">
+                    <option value="EASY">EASY — ≈1–1.5 nps, no chords (beginners)</option>
+                    <option value="BASIC">BASIC — ≈2–3 nps, max 2 simultaneous (novice)</option>
+                    <option value="NORMAL" selected>NORMAL — ≈3–4 nps, max 2 simultaneous (casual)</option>
+                    <option value="HARD">HARD — ≈4–6 nps, max 3 simultaneous (experienced)</option>
+                    <option value="EXPERT">EXPERT — ≈6–9 nps, max 4 simultaneous (advanced)</option>
+                  </select>
+                  <div class="small text-muted mt-1">
+                    ※ Simultaneous notes are automatically limited when lane count is low<br>
+                    <span id="audioDiffNote" class="hidden">※ In audio mode, changing difficulty regenerates the chart on the next play.</span>
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                Lane count <span id="laneCountVal">4</span>
-              </label>
-              <input type="range" class="form-range" id="laneCount" min="2" max="8" step="1" value="4">
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    Lane count <span id="laneCountVal">4</span>
+                  </label>
+                  <input type="range" class="form-range" id="laneCount" min="2" max="8" step="1" value="4">
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                Scroll speed <span id="scrollSpeedVal">500</span>
-              </label>
-              <input type="range" class="form-range" id="scrollSpeed" min="150" max="1200" step="50" value="500">
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    Scroll speed <span id="scrollSpeedVal">500</span>
+                  </label>
+                  <input type="range" class="form-range" id="scrollSpeed" min="150" max="1200" step="50" value="500">
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                Canvas resolution (max DPR) <span id="maxPixelRatioVal">2</span>
-              </label>
-              <input type="range" class="form-range" id="maxPixelRatio" min="1" max="3" step="0.5" value="2">
-              <div class="small text-muted mt-1">
-                Caps canvas resolution relative to the device pixel ratio.
-                Lower values use less memory and are more stable on mobile;
-                higher values look sharper on high-DPI displays. Default 2.
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    Canvas resolution (max DPR) <span id="maxPixelRatioVal">2</span>
+                  </label>
+                  <input type="range" class="form-range" id="maxPixelRatio" min="1" max="3" step="0.5" value="2">
+                  <div class="small text-muted mt-1">
+                    Caps canvas resolution relative to the device pixel ratio.
+                    Lower values use less memory and are more stable on mobile;
+                    higher values look sharper on high-DPI displays. Default 1.
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label">Lane keys</label>
-              <div id="laneKeyInputs" class="d-flex flex-wrap gap-2">
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">1</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">2</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">3</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">4</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">5</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">6</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">7</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">8</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    MIDI cache level <span id="cacheModeVal">5 (chunk)</span>
+                  </label>
+                  <input type="range" class="form-range" id="cacheMode" min="0" max="5" step="1" value="5">
+                  <div class="small text-muted mt-1">
+                    Higher levels cache more aggressively for complex MIDI (may use more memory).
+                    If the game crashes on iOS with MIDI, set the optimization level to 0.
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label">Lane colors</label>
-              <div id="laneColorPickers" class="lane-color-grid">
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">1</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">2</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">3</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">4</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">5</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">6</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">7</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">8</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label">Lane keys</label>
+                  <div id="laneKeyInputs" class="d-flex flex-wrap gap-2">
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">1</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">2</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">3</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">4</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">5</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">6</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">7</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">8</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                Lane opacity <span id="laneOpacityVal">0.35</span>
-              </label>
-              <input type="range" class="form-range" id="laneOpacity" min="0" max="1" step="0.05" value="0.35">
-            </div>
+                <div class="mb-3">
+                  <label class="form-label">Lane colors</label>
+                  <div id="laneColorPickers" class="lane-color-grid">
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">1</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">2</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">3</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">4</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">5</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">6</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">7</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">8</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between align-items-center mb-0">
-                Button text color (accent)
-                <span class="d-flex align-items-center gap-1">
-                  <input type="color" id="accentColor" class="form-control form-control-color"
-                         style="width:2.5em;height:1.8em;padding:2px;">
-                  <button type="button" id="btnResetAccentColor"
-                          class="btn btn-sm btn-outline-secondary py-0 px-2">Auto</button>
-                </span>
-              </label>
-              <div class="small text-muted mt-1">
-                Color for all canvas text: lane keys, combo, judgment, score, etc.
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    Lane opacity <span id="laneOpacityVal">0.35</span>
+                  </label>
+                  <input type="range" class="form-range" id="laneOpacity" min="0" max="1" step="0.05" value="0.35">
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between align-items-center mb-0">
-                Judgment line color
-                <span class="d-flex align-items-center gap-1">
-                  <input type="color" id="judgeLineColor" class="form-control form-control-color"
-                         style="width:2.5em;height:1.8em;padding:2px;">
-                  <button type="button" id="btnResetJudgeLineColor"
-                          class="btn btn-sm btn-outline-secondary py-0 px-2">Auto</button>
-                </span>
-              </label>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between align-items-center mb-0">
+                    Button text color (accent)
+                    <span class="d-flex align-items-center gap-1">
+                      <input type="color" id="accentColor" class="form-control form-control-color"
+                                                           style="width:2.5em;height:1.8em;padding:2px;">
+                      <button type="button" id="btnResetAccentColor"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2">Auto</button>
+                    </span>
+                  </label>
+                  <div class="small text-muted mt-1">
+                    Color for all canvas text: lane keys, combo, judgment, score, etc.
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between align-items-center mb-0">
-                Lane divider color
-                <span class="d-flex align-items-center gap-1">
-                  <input type="color" id="laneLineColor" class="form-control form-control-color"
-                         style="width:2.5em;height:1.8em;padding:2px;">
-                  <button type="button" id="btnResetLaneLineColor"
-                          class="btn btn-sm btn-outline-secondary py-0 px-2">Auto</button>
-                </span>
-              </label>
-              <div class="small text-muted mt-1">
-                Use a high-contrast color if hard to see on the background image.
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between align-items-center mb-0">
+                    Judgment line color
+                    <span class="d-flex align-items-center gap-1">
+                      <input type="color" id="judgeLineColor" class="form-control form-control-color"
+                                                              style="width:2.5em;height:1.8em;padding:2px;">
+                      <button type="button" id="btnResetJudgeLineColor"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2">Auto</button>
+                    </span>
+                  </label>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                Judgment offset <span id="judgeOffsetVal">0ms</span>
-              </label>
-              <input type="range" class="form-range" id="judgeOffset"
-                     min="-200" max="200" step="5" value="0">
-              <div class="small text-muted mt-1">
-                Increase if audio is late, decrease if early.
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between align-items-center mb-0">
+                    Lane divider color
+                    <span class="d-flex align-items-center gap-1">
+                      <input type="color" id="laneLineColor" class="form-control form-control-color"
+                                                             style="width:2.5em;height:1.8em;padding:2px;">
+                      <button type="button" id="btnResetLaneLineColor"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2">Auto</button>
+                    </span>
+                  </label>
+                  <div class="small text-muted mt-1">
+                    Use a high-contrast color if hard to see on the background image.
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="perspectiveEnabled" checked>
-                <label class="form-check-label" for="perspectiveEnabled">Perspective (narrower at the top)</label>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    Judgment offset <span id="judgeOffsetVal">0ms</span>
+                  </label>
+                  <input type="range" class="form-range" id="judgeOffset"
+                                                         min="-200" max="200" step="5" value="0">
+                  <div class="small text-muted mt-1">
+                    Increase if audio is late, decrease if early.
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label">Background</label>
-              <select class="form-select form-select-sm mb-2" id="backgroundPreset">
-                <option value="">None</option>
-                <option value="/flip-flap-notes/data/nasa-blue-marble.webp">Image 1: NASA Blue Marble</option>
-                <option value="/flip-flap-notes/data/nasa-galaxy.webp">Image 2: NASA Galaxy</option>
-                <option value="/flip-flap-notes/data/nasa-drift-ice.webp">Image 3: NASA Drift Ice</option>
-                <option value="/flip-flap-notes/data/japan-river.webp">Image 4: Japan River</option>
-                <option value="/flip-flap-notes/data/japan-lake.webp">Image 5: Japan Lake</option>
-                <option value="/flip-flap-notes/data/japan-sky.webp" selected>Image 6: Japan Sky</option>
-                <option value="/flip-flap-notes/data/japan-mountain.webp">Image 7: Japan Mountain</option>
-                <option value="/flip-flap-notes/data/japan-pagoda.webp">Image 8: Japan Pagoda</option>
-                <option value="/flip-flap-notes/data/japan-cave.webp">Image 9: Japan Cave</option>
-                <option value="/flip-flap-notes/data/japan-shrine.webp">Image 10: Japan Shrine</option>
-                <option value="/flip-flap-notes/data/fantasy-forest.webp">Image 11: Fantasy Forest</option>
-                <option value="/flip-flap-notes/data/fantasy-lake.webp">Image 12: Fantasy Lake</option>
-                <option value="/flip-flap-notes/data/fantasy-sea.webp">Image 13: Fantasy Sea</option>
-                <option value="/flip-flap-notes/data/fantasy-flare.webp">Image 14: Fantasy Flare</option>
-                <option value="/flip-flap-notes/data/cyber-space.webp">Image 15: Cyber Space</option>
-                <option value="/flip-flap-notes/data/cyber-network.webp">Image 16: Cyber Network</option>
-                <option value="/flip-flap-notes/data/cyber-magic.webp">Image 17: Cyber Magic</option>
-                <option value="/flip-flap-notes/data/movie-earth.webm">Movie 1: Earth</option>
-                <option value="/flip-flap-notes/data/movie-matrix-code.webm">Movie 2: Matrix Code</option>
-                <option value="/flip-flap-notes/data/movie-number-stream.webm">Movie 3: Number Stream</option>
-                <option value="/flip-flap-notes/data/movie-water.webm">Movie 4: Water</option>
-                <option value="custom">Custom file…</option>
-              </select>
-              <input class="form-control form-control-sm"
-                     type="file" id="backgroundFile" accept="image/*,video/*">
-            </div>
+                <div class="mb-3">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="perspectiveEnabled" checked>
+                    <label class="form-check-label" for="perspectiveEnabled">Perspective (narrower at the top)</label>
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label">Background</label>
+                  <select class="form-select form-select-sm mb-2" id="backgroundPreset">
+                    <option value="">None</option>
+                    <option value="/tip-tap-notes/data/nasa-blue-marble.webp">Image 1: NASA Blue Marble</option>
+                    <option value="/tip-tap-notes/data/nasa-galaxy.webp">Image 2: NASA Galaxy</option>
+                    <option value="/tip-tap-notes/data/nasa-drift-ice.webp">Image 3: NASA Drift Ice</option>
+                    <option value="/tip-tap-notes/data/japan-river.webp">Image 4: Japan River</option>
+                    <option value="/tip-tap-notes/data/japan-lake.webp">Image 5: Japan Lake</option>
+                    <option value="/tip-tap-notes/data/japan-sky.webp" selected>Image 6: Japan Sky</option>
+                    <option value="/tip-tap-notes/data/japan-mountain.webp">Image 7: Japan Mountain</option>
+                    <option value="/tip-tap-notes/data/japan-pagoda.webp">Image 8: Japan Pagoda</option>
+                    <option value="/tip-tap-notes/data/japan-cave.webp">Image 9: Japan Cave</option>
+                    <option value="/tip-tap-notes/data/japan-shrine.webp">Image 10: Japan Shrine</option>
+                    <option value="/tip-tap-notes/data/fantasy-forest.webp">Image 11: Fantasy Forest</option>
+                    <option value="/tip-tap-notes/data/fantasy-lake.webp">Image 12: Fantasy Lake</option>
+                    <option value="/tip-tap-notes/data/fantasy-sea.webp">Image 13: Fantasy Sea</option>
+                    <option value="/tip-tap-notes/data/fantasy-flare.webp">Image 14: Fantasy Flare</option>
+                    <option value="/tip-tap-notes/data/cyber-space.webp">Image 15: Cyber Space</option>
+                    <option value="/tip-tap-notes/data/cyber-network.webp">Image 16: Cyber Network</option>
+                    <option value="/tip-tap-notes/data/cyber-magic.webp">Image 17: Cyber Magic</option>
+                    <option value="/tip-tap-notes/data/movie-earth.webm">Movie 1: Earth</option>
+                    <option value="/tip-tap-notes/data/movie-matrix-code.webm">Movie 2: Matrix Code</option>
+                    <option value="/tip-tap-notes/data/movie-number-stream.webm">Movie 3: Number Stream</option>
+                    <option value="/tip-tap-notes/data/movie-water.webm">Movie 4: Water</option>
+                    <option value="custom">Custom file…</option>
+                  </select>
+                  <input class="form-control form-control-sm"
+                         type="file" id="backgroundFile" accept="image/*,video/*">
+                </div>
+
+                <hr class="my-4">
+
+                <div class="mb-3">
+                  <label class="form-label">Reset</label>
+                  <div>
+                    <button type="button" id="btnResetAllSettings" class="btn btn-sm btn-outline-danger">
+                      Reset all settings
+                    </button>
+                  </div>
+                  <div class="small text-muted mt-1">
+                    Clears all saved settings (theme, colors, keys, custom background, etc.)
+                    and reloads the page. This cannot be undone.
+                  </div>
+                </div>
 
               </div><!-- /settingsBody (modal-body) -->
 
               <div class="modal-footer" id="settingsFooter">
                 <button type="button" id="btnCancelSettings" class="btn btn-outline-secondary"
-                        data-bs-dismiss="modal">Cancel</button>
+                                                             data-bs-dismiss="modal">Cancel</button>
                 <button type="button" id="btnApplySettings" class="btn btn-primary">Apply & close</button>
               </div>
 
@@ -965,6 +1057,8 @@
     <!-- i18n strings for game.js (alerts/error messages, analysis progress labels, etc.
          Dynamic text not held as HTML elements. For localization, swap only this block.) -->
     <div id="i18nStrings" hidden>
+      <span data-key="randomMidi">🎲 Random MIDI</span>
+      <span data-key="randomMidiLoading">⏳ Loading…</span>
       <span data-key="unsupportedFileType">Unsupported file type (supports MIDI / SoundFont / audio files)</span>
       <span data-key="beatmapGenerationFailedPrefix">Chart generation failed: </span>
       <span data-key="audioNotLoaded">Audio is not loaded</span>
@@ -987,6 +1081,7 @@
       form-control form-control-sm is-invalid
       pagination page-item page-link active
       btn-check btn btn-sm btn-outline-primary btn-outline-secondary m-1
+      list-group shadow-sm list-group-item py-1 px-2
       d-none"></div>
     <script type="module" src="/flip-flap-notes/index.js"></script>
   </body>

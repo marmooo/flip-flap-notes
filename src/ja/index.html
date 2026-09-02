@@ -9,7 +9,29 @@
     <meta property="og:description" content="音楽ファイル（MP3/WAV/OGGなど）を読み込むだけで自動で譜面を生成するブラウザ音ゲーです。タップ・ホールド・リリースノーツ対応。MIDIファイルの直接プレイや、サウンドフォント(SF2/SF3)を使った音源変更にも対応しています。">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary_large_image">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
+    <script>
+      (function() {
+        const saved = localStorage.getItem("darkMode");
+        const prefersDark = globalThis.matchMedia("(prefers-color-scheme: dark)").matches;
+        const theme = saved || (prefersDark ? "dark" : "light");
+        document.documentElement.setAttribute("data-bs-theme", theme);
+      })();
+    </script>
+    <!-- Global site tag (gtag.js) - Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-F2179JXDYY"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-F2179JXDYY');
+    </script>
+    <link rel="icon" type="image/png" href="/flip-flap-notes/favicon/favicon.png">
+    <link rel="icon" type="image/svg+xml" href="/flip-flap-notes/favicon/favicon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="/flip-flap-notes/favicon/apple-touch-icon.png">
+    <link rel="manifest" href="/flip-flap-notes/favicon/site.webmanifest">
+    <link rel="alternate" href="https://marmooo.github.io/flip-flap-notes/" hreflang="x-default">
+    <link rel="alternate" href="https://marmooo.github.io/flip-flap-notes/ja/" hreflang="ja">
+    <link rel="alternate" href="https://marmooo.github.io/flip-flap-notes/en/" hreflang="en">
     <link class="drop-inline-css" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
     <link class="drop-inline-css" id="iosTouchGuardsStyle" rel="stylesheet" href="/flip-flap-notes/ios-touch-guards.css">
     <style>
@@ -89,16 +111,38 @@
       }
       #uiCanvas { pointer-events: auto; outline: none; }
 
-      /* トラック帰属表示（タイトル / 作曲者 / サイト / ライセンス）。ready / playing / result 中に表示。
-         常に #topnav の下（ナビバー上や中には被らない）。広い画面では左右余白を取り
-           一時停止ボタン・スコア行と横並び。狭い画面ではその上に積み上げ、
-         --attr-h で一時停止とキャンバスHUDを下げる（JS側で設定）。 */
-      #trackAttribution {
+      /* ===== HUD スタック: ポーズボタン / 曲情報 / スコア =====
+         以前の absolute-position + JS による高さ同期（--attr-h）方式をやめ、
+         1つの CSS Grid でレイアウトする。
+         Grid の "auto" トラックは各要素の実際の描画幅・高さに合わせて
+         自動的にサイズ調整されるため、フォントによるメトリクスの違いがあっても
+         ポーズボタンとスコアが曲情報と重ならない。
+         衝突を防ぐために JS でサイズを測定する必要もない。
+         横幅の広い画面: 1行 [ポーズ | 曲情報（可変幅） | スコア]
+         狭い / 高さの低い画面: 曲情報を独立した全幅の行に配置し、
+         その下の行でポーズとスコアを左右に配置する。
+         メディアクエリで Grid のテンプレートを切り替えるだけで、
+         JS は使用しない。 */
+      #hudStack {
         position: absolute;
-        top: calc(var(--topbar-h, 48px) + 0.2rem);
-        left: 3.6rem;   /* ≈ pause button (2.4rem) + left:10px + gap */
-        right: 7.0rem;  /* score HUD (~7 digits + padding) */
+        top: var(--topbar-h, 48px);
+        left: 0.625rem;
+        right: 0.625rem;
         z-index: 6;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        grid-template-areas: "pause attr score";
+        align-items: start;
+        column-gap: 0.5rem;
+        pointer-events: none;
+      }
+      #hudStack > * { pointer-events: none; }
+      #btnPause { grid-area: pause; pointer-events: auto; }
+      #trackAttribution { grid-area: attr; }
+      #scoreDisplay { grid-area: score; }
+
+      #trackAttribution {
+        margin-top: 0.2rem;
         padding: 0.2rem 0.45rem;
         border-radius: 0.4rem;
         text-align: center;
@@ -132,11 +176,38 @@
         content: " · ";
         opacity: 0.7;
       }
-      /* 狭い・低い画面: ナビ直下の全幅バー。一時停止・スコアは --attr-h で下へずらす */
+
+      /* スコア HUD。以前は Canvas（ctx.fillText）に描画していたが、
+         現在は DOM 要素に変更し、ブラウザ自身にレイアウトさせることで
+         ピクセル幅を推測する必要をなくした。
+         見た目は以前と同じ:
+         太字の等幅フォントを使用し、
+         色は --score-color で指定する。
+         --score-color は rhythm-game.js の accentColor||uiColor と
+         同じ色になるよう JS から設定する。
+         グロー効果は付けない。
+         Canvas 版のスコアにもグローはなく、グローするのはコンボだけ。 */
+      #scoreDisplay {
+        margin-top: 0.2rem;
+        padding-right: 0.2rem;
+        font: bold 1.15rem/1.2 monospace;
+        color: var(--score-color, currentColor);
+        text-align: right;
+        white-space: nowrap;
+      }
+      #scoreDisplay.hidden { display: none !important; }
+
+      /* Narrow / short: attribution full-width on its own row; pause/score below it */
       @media (max-width: 576px), (max-height: 420px) {
+        #hudStack {
+          grid-template-columns: auto 1fr;
+          grid-template-rows: auto auto;
+          grid-template-areas:
+            "attr  attr"
+            "pause score";
+          row-gap: 0.3rem;
+        }
         #trackAttribution {
-          left: 0.5rem;
-          right: 0.5rem;
           padding: 0.15rem 0.4rem;
           background: color-mix(in srgb, var(--bs-body-bg) 32%, transparent);
         }
@@ -401,7 +472,7 @@
          見えたため、50度まで強めて台形の狭まりを出し直した。角度を強めた分
          収束点が下がるので、perspectiveも1400→1800pxに広げて背の高い
          画面でも収束点が画面内に入らないよう余裕を持たせてある）。
-         --note-h（タップ/ホールドの長さ違い）と --note-color（色違い）は
+         --note-h（タップノーツの長さの微妙な個体差）と --note-color（色違い）は
          HTML側で1個ずつ指定し、CSSはそれを受け取るだけにしてある。
          レーンごとに台形の傾き角を厳密に変える、といったところまでは
          やらない（背景演出としてはやり過ぎでコストに見合わない）。 */
@@ -441,6 +512,7 @@
         background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bs-warning) 55%, transparent) 50%, transparent);
       }
     </style>
+    <script data-ad-client="ca-pub-6459713332128733" async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
   </head>
   <body>
 
@@ -477,31 +549,41 @@
         <canvas id="particleCanvas" class="gameLayer"></canvas>
         <canvas id="uiCanvas"       class="gameLayer"></canvas>
 
-        <!-- スコア（Canvas右上に描画）と対称に、左上に一時停止ボタンを配置。
-             MIDI/音声どちらのモードもこのボタンから togglePause() を呼ぶ
-             （MIDIモードは内部で midy.pause()/resume() を直接使う）。
-             #topnav は透過オーバーレイで同じ左上コーナーに浮いているため、
-             そのままだとブランドロゴの当たり判定に埋もれて押せなくなる。
-             --topbar-h（game.js の setWrapHeight() が設定）ぶんだけ下にずらす。
-             中身のSVGは絵文字（⏸/▶）の代わり。フォント/OS依存で丸ボタンから
-             はみ出したり欠けたりするのを避けるため、固定サイズのSVGに統一
-             （実際の切り替えは game.js の ICON_PAUSE / ICON_PLAY が innerHTML で行う）。 -->
-        <button id="btnPause" type="button" title="スペースキーで一時停止/再開"
-                class="btn btn-sm btn-secondary rounded-circle hidden
-                       d-flex align-items-center justify-content-center"
-                style="position:absolute; top:calc(var(--topbar-h, 0px));
-                       left:10px; z-index:5;
-                       width:2.4rem; height:2.4rem; padding:0;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
-               viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true">
-            <path d="M555-200v-560h175v560H555Zm-325 0v-560h175v560H230Z"></path>
-          </svg>
-        </button>
+        <!-- HUD スタック: ポーズボタン / 曲情報 / スコア。
+             #hudStack の CSS Grid（上記参照）でまとめてレイアウトすることで、
+             要素同士が重ならないようにする。
+             狭い画面と広い画面での配置変更も CSS だけで行い、
+             JS による高さ同期は不要。 -->
+        <div id="hudStack">
+          <!-- ポーズボタン。
+               MIDI モードと音声モードのどちらも、このボタンから togglePause() を呼び出す。
+               MIDI モードでは内部的に midy.pause()/resume() を使用する。
+               ⏸ / ▶ の絵文字ではなく SVG を使用することで、
+               フォントや OS によるはみ出し・クリッピングを防ぐ。
+               SVG は固定サイズ。
+               実際のアイコン切り替えは game.js の
+               ICON_PAUSE / ICON_PLAY を innerHTML に設定して行う。 -->
+          <button id="btnPause" type="button" title="Space to pause/resume"
+                  class="btn btn-sm btn-secondary rounded-circle hidden
+                         d-flex align-items-center justify-content-center"
+                  style="width:2.4rem; height:2.4rem; padding:0;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+                 viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true">
+              <path d="M555-200v-560h175v560H555Zm-325 0v-560h175v560H230Z"></path>
+            </svg>
+          </button>
 
-        <!-- MIDIライブラリ作品のトラック帰属表示（タイトル / 作曲者 / サイト / ライセンス） -->
-        <div id="trackAttribution" class="small hidden" aria-live="polite">
-          <div id="trackAttrTitle"></div>
-          <div id="trackAttrMeta"></div>
+          <!-- Track attribution for MIDI library works (title / composer / site / license) -->
+          <div id="trackAttribution" class="small hidden" aria-live="polite">
+            <div id="trackAttrTitle"></div>
+            <div id="trackAttrMeta"></div>
+          </div>
+
+          <!-- Score HUD. Formerly drawn on the Canvas top-right corner
+               (rhythm-game.js #drawHUD); moved to DOM so the grid can size around
+               its real rendered width instead of us hard-coding an inset. Text is
+               kept in sync with lastResult.score from game.js's rAF loop. -->
+          <div id="scoreDisplay" class="hidden" aria-hidden="true">0000000</div>
         </div>
 
         <!-- 一時停止中の表示（プレイ中のみ btnPause から表示/非表示を切り替え） -->
@@ -625,272 +707,317 @@
         </div>
 
         <!-- Result screen -->
-        <div id="screenResult" class="overlay hidden">
-          <div class="card p-4 text-center border-secondary-subtle" style="min-width:270px;">
-            <div id="resultGrade" class="grade-badge mb-2"></div>
-            <h3 class="fw-bold mb-3 text-warning-emphasis">RESULT</h3>
-            <table id="resultTable" class="mx-auto mb-3 small">
-              <tr><td class="label">Score</td>    <td id="rScore"    class="text-end fw-bold"></td></tr>
-              <tr><td class="label">Accuracy</td> <td id="rAccuracy" class="text-end"></td></tr>
-              <tr><td class="label">Max Combo</td><td id="rCombo"    class="text-end"></td></tr>
-              <tr><td class="label">Perfect</td>  <td id="rPerfect"  class="text-end text-warning-emphasis"></td></tr>
-              <tr><td class="label">Great</td>    <td id="rGreat"    class="text-end text-success-emphasis"></td></tr>
-              <tr><td class="label">Good</td>     <td id="rGood"     class="text-end text-info-emphasis"></td></tr>
-              <tr><td class="label">Miss</td>     <td id="rMiss"     class="text-end text-danger-emphasis"></td></tr>
-            </table>
-            <button id="btnBigReplay" type="button"
-                    class="btn btn-primary rounded-pill fw-bold px-4 py-2">
-              ▶ もう一度プレイ
-            </button>
-            <p class="small text-muted mt-2 mb-0">スペースキーでもリプレイできます</p>
-            <div class="mt-3">
-              <button id="btnRandomMidi" type="button"
-                      class="btn btn-outline-info rounded-pill fw-bold px-3 py-2">
-                🎲 ランダムMIDI（1分以上）
-              </button>
-              <p class="small text-muted mt-1 mb-0">MIDIライブラリから1分以上の曲をランダムに選ぶ</p>
-            </div>
-            <div>
-              <button id="btnChangeFileResult" type="button"
-                      class="btn btn-sm btn-link text-muted mt-2">📂 スタート画面に戻る</button>
+        <div class="modal" id="screenResult" tabindex="-1" aria-labelledby="screenResultLabel" aria-hidden="true">
+          <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+            <div class="modal-content text-center">
+              <div class="modal-header justify-content-center border-0 pb-0">
+                <div>
+                  <div id="resultGrade" class="grade-badge mb-1"></div>
+                  <h3 class="fw-bold mb-0 text-warning-emphasis" id="screenResultLabel">RESULT</h3>
+                </div>
+              </div>
+              <div class="modal-body pt-2">
+                <table id="resultTable" class="mx-auto mb-0 small">
+                  <tr><td class="label">Score</td>    <td id="rScore"    class="text-end fw-bold"></td></tr>
+                  <tr><td class="label">Accuracy</td> <td id="rAccuracy" class="text-end"></td></tr>
+                  <tr><td class="label">Max Combo</td><td id="rCombo"    class="text-end"></td></tr>
+                  <tr><td class="label">Perfect</td>  <td id="rPerfect"  class="text-end text-warning-emphasis"></td></tr>
+                  <tr><td class="label">Great</td>    <td id="rGreat"    class="text-end text-success-emphasis"></td></tr>
+                  <tr><td class="label">Good</td>     <td id="rGood"     class="text-end text-info-emphasis"></td></tr>
+                  <tr><td class="label">Miss</td>     <td id="rMiss"     class="text-end text-danger-emphasis"></td></tr>
+                  <tr><td class="label">Difficulty</td><td id="rDifficulty" class="text-end"></td></tr>
+                  <tr><td class="label">Lanes</td>   <td id="rLanes"     class="text-end"></td></tr>
+                  <tr><td class="label">Scroll</td>  <td id="rScrollSpeed" class="text-end"></td></tr>
+                </table>
+              </div>
+              <div class="modal-footer flex-column border-0 pt-0">
+                <div class="d-flex gap-1 justify-content-center">
+                  <div class="w-50">
+                    <button id="btnBigReplay" type="button"
+                            class="btn btn-primary rounded-pill fw-bold w-100">
+                      ▶ もう一度プレイ
+                    </button>
+                    <p class="small text-muted mt-1 mb-0 d-none d-md-block">
+                      スペースキーでもリプレイできます
+                    </p>
+                  </div>
+                  <div class="w-50">
+                    <button id="btnRandomMidi" type="button"
+                            class="btn btn-outline-info rounded-pill fw-bold w-100">
+                      🎲 ランダム MIDI
+                    </button>
+                    <p class="small text-muted mt-1 mb-0 d-none d-md-block">
+                      MIDIライブラリから1分以上の曲をランダムに選ぶ
+                    </p>
+                  </div>
+                </div>
+                <button id="btnChangeFileResult" type="button"
+                        class="btn btn-sm btn-link text-muted">📂 スタート画面に戻る</button>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- Settings (Bootstrap modal) -->
+        <!-- Settings -->
         <div class="modal" id="screenSettings" tabindex="-1"
-             aria-labelledby="screenSettingsLabel" aria-hidden="true">
+                                               aria-labelledby="screenSettingsLabel" aria-hidden="true">
           <div class="modal-dialog modal-dialog-scrollable">
             <div class="modal-content" id="settingsPanel">
 
               <div class="modal-header">
                 <h5 class="modal-title fw-bold text-warning-emphasis" id="screenSettingsLabel">⚙ 設定</h5>
                 <button type="button" class="btn-close" id="btnCloseSettings"
-                        data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
 
               <div class="modal-body" id="settingsBody">
 
-            <div class="mb-3">
-              <label class="form-label">難易度</label>
-              <select class="form-select form-select-sm" id="difficulty">
-                <option value="EASY">EASY — ≒1〜1.5 nps・同時押しなし（未経験者向け）</option>
-                <option value="BASIC">BASIC — ≒2〜3 nps・最大同時押し2（初心者向け）</option>
-                <option value="NORMAL" selected>NORMAL — ≒3〜4 nps・最大同時押し2（カジュアル）</option>
-                <option value="HARD">HARD — ≒4〜6 nps・最大同時押し3（経験者向け）</option>
-                <option value="EXPERT">HARD — ≒6〜9 nps・最大同時押し4（上級者向け）</option>
-              </select>
-              <div class="small text-muted mt-1">
-                ※同時押し数はレーン数が少ないと自動的に制限されます<br>
-                <span id="audioDiffNote" class="hidden">※音声モードでは難易度を変えると次回再生時に譜面を自動で再生成します。</span>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label">難易度</label>
+                  <select class="form-select form-select-sm" id="difficulty">
+                    <option value="EASY">EASY — ≒1〜1.5 nps・同時押しなし（未経験者向け）</option>
+                    <option value="BASIC">BASIC — ≒2〜3 nps・最大同時押し2（初心者向け）</option>
+                    <option value="NORMAL" selected>NORMAL — ≒3〜4 nps・最大同時押し2（カジュアル）</option>
+                    <option value="HARD">HARD — ≒4〜6 nps・最大同時押し3（経験者向け）</option>
+                    <option value="EXPERT">EXPERT — ≒6〜9 nps・最大同時押し4（上級者向け）</option>
+                  </select>
+                  <div class="small text-muted mt-1">
+                    ※同時押し数はレーン数が少ないと自動的に制限されます<br>
+                    <span id="audioDiffNote" class="hidden">※音声モードでは難易度を変えると次回再生時に譜面を自動で再生成します。</span>
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                レーン数 <span id="laneCountVal">4</span>
-              </label>
-              <input type="range" class="form-range" id="laneCount" min="2" max="8" step="1" value="4">
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    レーン数 <span id="laneCountVal">4</span>
+                  </label>
+                  <input type="range" class="form-range" id="laneCount" min="2" max="8" step="1" value="4">
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                スクロール速度 <span id="scrollSpeedVal">500</span>
-              </label>
-              <input type="range" class="form-range" id="scrollSpeed" min="150" max="1200" step="50" value="500">
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    スクロール速度 <span id="scrollSpeedVal">500</span>
+                  </label>
+                  <input type="range" class="form-range" id="scrollSpeed" min="150" max="1200" step="50" value="500">
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                Canvas解像度（最大DPR） <span id="maxPixelRatioVal">2</span>
-              </label>
-              <input type="range" class="form-range" id="maxPixelRatio" min="1" max="3" step="0.5" value="2">
-              <div class="small text-muted mt-1">
-                端末の devicePixelRatio に対する Canvas 解像度の上限です。
-                低いほどメモリ使用量が減りモバイルで安定しやすく、
-                高いほど高DPIディスプレイでくっきりします。既定値は 2。
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    Canvas 解像度（最大DPR） <span id="maxPixelRatioVal">2</span>
+                  </label>
+                  <input type="range" class="form-range" id="maxPixelRatio" min="1" max="3" step="0.5" value="2">
+                  <div class="small text-muted mt-1">
+                    端末の devicePixelRatio に対する Canvas 解像度の上限です。
+                    低いほどメモリ使用量が減りモバイルで安定しやすく、
+                    高いほど高DPIディスプレイでくっきりします。既定値は 1。
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label">レーンキー</label>
-              <div id="laneKeyInputs" class="d-flex flex-wrap gap-2">
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">1</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">2</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">3</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">4</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">5</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">6</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">7</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">8</span>
-                  <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
-                </label>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    MIDI キャッシュレベル <span id="cacheModeVal">5（チャンク）</span>
+                  </label>
+                  <input type="range" class="form-range" id="cacheMode" min="0" max="5" step="1" value="5">
+                  <div class="small text-muted mt-1">
+                    レベルが高いほど複雑な MIDI を積極的にキャッシュします（メモリ使用量が増える場合があります）。
+                    iOS で MIDI 再生中にゲームがクラッシュする場合は、最適化レベルを 0 に設定してください。
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label">レーンカラー</label>
-              <div id="laneColorPickers" class="lane-color-grid">
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">1</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">2</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">3</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">4</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">5</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">6</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">7</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-                <label class="lane-input-wrap">
-                  <span class="small text-muted">8</span>
-                  <input type="color" class="form-control form-control-color">
-                </label>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label">レーンキー</label>
+                  <div id="laneKeyInputs" class="d-flex flex-wrap gap-2">
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">1</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">2</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">3</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">4</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">5</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">6</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">7</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">8</span>
+                      <input type="text" maxlength="1" class="form-control form-control-sm bg-dark text-light border-secondary text-center font-monospace fw-bold lane-key-input">
+                    </label>
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                レーンの不透明度 <span id="laneOpacityVal">0.35</span>
-              </label>
-              <input type="range" class="form-range" id="laneOpacity" min="0" max="1" step="0.05" value="0.35">
-            </div>
+                <div class="mb-3">
+                  <label class="form-label">レーンカラー</label>
+                  <div id="laneColorPickers" class="lane-color-grid">
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">1</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">2</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">3</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">4</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">5</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">6</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">7</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                    <label class="lane-input-wrap">
+                      <span class="small text-muted">8</span>
+                      <input type="color" class="form-control form-control-color">
+                    </label>
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between align-items-center mb-0">
-                ボタン文字色（アクセントカラー）
-                <span class="d-flex align-items-center gap-1">
-                  <input type="color" id="accentColor" class="form-control form-control-color"
-                         style="width:2.5em;height:1.8em;padding:2px;">
-                  <button type="button" id="btnResetAccentColor"
-                          class="btn btn-sm btn-outline-secondary py-0 px-2">自動</button>
-                </span>
-              </label>
-              <div class="small text-muted mt-1">
-                レーンキー・コンボ・判定・スコアなど、Canvas上の文字全体の色。
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    レーンの不透明度 <span id="laneOpacityVal">0.35</span>
+                  </label>
+                  <input type="range" class="form-range" id="laneOpacity" min="0" max="1" step="0.05" value="0.35">
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between align-items-center mb-0">
-                判定ラインの色
-                <span class="d-flex align-items-center gap-1">
-                  <input type="color" id="judgeLineColor" class="form-control form-control-color"
-                         style="width:2.5em;height:1.8em;padding:2px;">
-                  <button type="button" id="btnResetJudgeLineColor"
-                          class="btn btn-sm btn-outline-secondary py-0 px-2">自動</button>
-                </span>
-              </label>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between align-items-center mb-0">
+                    ボタン文字色（アクセントカラー）
+                    <span class="d-flex align-items-center gap-1">
+                      <input type="color" id="accentColor" class="form-control form-control-color"
+                                                           style="width:2.5em;height:1.8em;padding:2px;">
+                      <button type="button" id="btnResetAccentColor"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2">自動</button>
+                    </span>
+                  </label>
+                  <div class="small text-muted mt-1">
+                    レーンキー・コンボ・判定・スコアなど、Canvas 上の文字全体の色。
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between align-items-center mb-0">
-                レーン区切り線の色
-                <span class="d-flex align-items-center gap-1">
-                  <input type="color" id="laneLineColor" class="form-control form-control-color"
-                         style="width:2.5em;height:1.8em;padding:2px;">
-                  <button type="button" id="btnResetLaneLineColor"
-                          class="btn btn-sm btn-outline-secondary py-0 px-2">自動</button>
-                </span>
-              </label>
-              <div class="small text-muted mt-1">
-                背景画像で見えにくい場合はコントラストの強い色に。
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between align-items-center mb-0">
+                    判定ラインの色
+                    <span class="d-flex align-items-center gap-1">
+                      <input type="color" id="judgeLineColor" class="form-control form-control-color"
+                                                              style="width:2.5em;height:1.8em;padding:2px;">
+                      <button type="button" id="btnResetJudgeLineColor"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2">自動</button>
+                    </span>
+                  </label>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label d-flex justify-content-between">
-                判定オフセット <span id="judgeOffsetVal">0ms</span>
-              </label>
-              <input type="range" class="form-range" id="judgeOffset"
-                     min="-200" max="200" step="5" value="0">
-              <div class="small text-muted mt-1">
-                音が遅ければ＋、早ければ−に調整。
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between align-items-center mb-0">
+                    レーン区切り線の色
+                    <span class="d-flex align-items-center gap-1">
+                      <input type="color" id="laneLineColor" class="form-control form-control-color"
+                                                             style="width:2.5em;height:1.8em;padding:2px;">
+                      <button type="button" id="btnResetLaneLineColor"
+                                            class="btn btn-sm btn-outline-secondary py-0 px-2">自動</button>
+                    </span>
+                  </label>
+                  <div class="small text-muted mt-1">
+                    背景画像で見えにくい場合はコントラストの強い色に。
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="perspectiveEnabled" checked>
-                <label class="form-check-label" for="perspectiveEnabled">遠近感（画面上側を狭く表示）</label>
-              </div>
-            </div>
+                <div class="mb-3">
+                  <label class="form-label d-flex justify-content-between">
+                    判定オフセット <span id="judgeOffsetVal">0ms</span>
+                  </label>
+                  <input type="range" class="form-range" id="judgeOffset"
+                                                         min="-200" max="200" step="5" value="0">
+                  <div class="small text-muted mt-1">
+                    音が遅ければ＋、早ければ−に調整。
+                  </div>
+                </div>
 
-            <div class="mb-3">
-              <label class="form-label">背景</label>
-              <select class="form-select form-select-sm mb-2" id="backgroundPreset">
-                <option value="">なし</option>
-                <option value="/flip-flap-notes/data/nasa-blue-marble.webp">Image 1: NASA Blue Marble</option>
-                <option value="/flip-flap-notes/data/nasa-galaxy.webp">Image 2: NASA Galaxy</option>
-                <option value="/flip-flap-notes/data/nasa-drift-ice.webp">Image 3: NASA Drift Ice</option>
-                <option value="/flip-flap-notes/data/japan-river.webp">Image 4: Japan River</option>
-                <option value="/flip-flap-notes/data/japan-lake.webp">Image 5: Japan Lake</option>
-                <option value="/flip-flap-notes/data/japan-sky.webp" selected>Image 6: Japan Sky</option>
-                <option value="/flip-flap-notes/data/japan-mountain.webp">Image 7: Japan Mountain</option>
-                <option value="/flip-flap-notes/data/japan-pagoda.webp">Image 8: Japan Pagoda</option>
-                <option value="/flip-flap-notes/data/japan-cave.webp">Image 9: Japan Cave</option>
-                <option value="/flip-flap-notes/data/japan-shrine.webp">Image 10: Japan Shrine</option>
-                <option value="/flip-flap-notes/data/fantasy-forest.webp">Image 11: Fantasy Forest</option>
-                <option value="/flip-flap-notes/data/fantasy-lake.webp">Image 12: Fantasy Lake</option>
-                <option value="/flip-flap-notes/data/fantasy-sea.webp">Image 13: Fantasy Sea</option>
-                <option value="/flip-flap-notes/data/fantasy-flare.webp">Image 14: Fantasy Flare</option>
-                <option value="/flip-flap-notes/data/cyber-space.webp">Image 15: Cyber Space</option>
-                <option value="/flip-flap-notes/data/cyber-network.webp">Image 16: Cyber Network</option>
-                <option value="/flip-flap-notes/data/cyber-magic.webp">Image 17: Cyber Magic</option>
-                <option value="/flip-flap-notes/data/movie-earth.webm">Movie 1: Earth</option>
-                <option value="/flip-flap-notes/data/movie-matrix-code.webm">Movie 2: Matrix Code</option>
-                <option value="/flip-flap-notes/data/movie-number-stream.webm">Movie 3: Number Stream</option>
-                <option value="/flip-flap-notes/data/movie-water.webm">Movie 4: Water</option>
-                <option value="custom">カスタムファイル…</option>
-              </select>
-              <input class="form-control form-control-sm"
-                     type="file" id="backgroundFile" accept="image/*,video/*">
-            </div>
+                <div class="mb-3">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="perspectiveEnabled" checked>
+                    <label class="form-check-label" for="perspectiveEnabled">遠近感（画面上側を狭く表示）</label>
+                  </div>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label">背景</label>
+                  <select class="form-select form-select-sm mb-2" id="backgroundPreset">
+                    <option value="">なし</option>
+                    <option value="/flip-flap-notes/data/nasa-blue-marble.webp">Image 1: NASA Blue Marble</option>
+                    <option value="/flip-flap-notes/data/nasa-galaxy.webp">Image 2: NASA Galaxy</option>
+                    <option value="/flip-flap-notes/data/nasa-drift-ice.webp">Image 3: NASA Drift Ice</option>
+                    <option value="/flip-flap-notes/data/japan-river.webp">Image 4: Japan River</option>
+                    <option value="/flip-flap-notes/data/japan-lake.webp">Image 5: Japan Lake</option>
+                    <option value="/flip-flap-notes/data/japan-sky.webp" selected>Image 6: Japan Sky</option>
+                    <option value="/flip-flap-notes/data/japan-mountain.webp">Image 7: Japan Mountain</option>
+                    <option value="/flip-flap-notes/data/japan-pagoda.webp">Image 8: Japan Pagoda</option>
+                    <option value="/flip-flap-notes/data/japan-cave.webp">Image 9: Japan Cave</option>
+                    <option value="/flip-flap-notes/data/japan-shrine.webp">Image 10: Japan Shrine</option>
+                    <option value="/flip-flap-notes/data/fantasy-forest.webp">Image 11: Fantasy Forest</option>
+                    <option value="/flip-flap-notes/data/fantasy-lake.webp">Image 12: Fantasy Lake</option>
+                    <option value="/flip-flap-notes/data/fantasy-sea.webp">Image 13: Fantasy Sea</option>
+                    <option value="/flip-flap-notes/data/fantasy-flare.webp">Image 14: Fantasy Flare</option>
+                    <option value="/flip-flap-notes/data/cyber-space.webp">Image 15: Cyber Space</option>
+                    <option value="/flip-flap-notes/data/cyber-network.webp">Image 16: Cyber Network</option>
+                    <option value="/flip-flap-notes/data/cyber-magic.webp">Image 17: Cyber Magic</option>
+                    <option value="/flip-flap-notes/data/movie-earth.webm">Movie 1: Earth</option>
+                    <option value="/flip-flap-notes/data/movie-matrix-code.webm">Movie 2: Matrix Code</option>
+                    <option value="/flip-flap-notes/data/movie-number-stream.webm">Movie 3: Number Stream</option>
+                    <option value="/flip-flap-notes/data/movie-water.webm">Movie 4: Water</option>
+                    <option value="custom">カスタムファイル…</option>
+                  </select>
+                  <input class="form-control form-control-sm"
+                         type="file" id="backgroundFile" accept="image/*,video/*">
+                </div>
+
+                <hr class="my-4">
+
+                <div class="mb-3">
+                  <label class="form-label">リセット</label>
+                  <div>
+                    <button type="button" id="btnResetAllSettings" class="btn btn-sm btn-outline-danger">
+                      すべての設定をリセット
+                    </button>
+                  </div>
+                  <div class="small text-muted mt-1">
+                    保存されているすべての設定（テーマ、色、キー、カスタム背景など）を消去して、ページを再読み込みします。
+                    この操作は元に戻せません。
+                  </div>
+                </div>
 
               </div><!-- /settingsBody (modal-body) -->
 
               <div class="modal-footer" id="settingsFooter">
                 <button type="button" id="btnCancelSettings" class="btn btn-outline-secondary"
-                        data-bs-dismiss="modal">キャンセル</button>
+                                                             data-bs-dismiss="modal">キャンセル</button>
                 <button type="button" id="btnApplySettings" class="btn btn-primary">適用して閉じる</button>
               </div>
 
@@ -953,6 +1080,8 @@
     <!-- i18n strings for game.js（alert/エラーメッセージ・解析進捗ラベルなど、HTML要素として
          持たない動的テキスト用。多言語化する場合はここだけ差し替えればよい） -->
     <div id="i18nStrings" hidden>
+      <span data-key="randomMidi">🎲 ランダム MIDI</span>
+      <span data-key="randomMidiLoading">⏳ 読込中…</span>
       <span data-key="unsupportedFileType">対応していないファイル形式です（MIDI / SoundFont / 音声ファイルに対応しています）</span>
       <span data-key="beatmapGenerationFailedPrefix">譜面生成に失敗しました: </span>
       <span data-key="audioNotLoaded">音声が読み込まれていません</span>
@@ -975,6 +1104,7 @@
       form-control form-control-sm is-invalid
       pagination page-item page-link active
       btn-check btn btn-sm btn-outline-primary btn-outline-secondary m-1
+      list-group shadow-sm list-group-item py-1 px-2
       d-none"></div>
     <script type="module" src="/flip-flap-notes/index.js"></script>
   </body>
