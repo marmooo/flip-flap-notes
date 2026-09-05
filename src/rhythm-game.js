@@ -266,6 +266,9 @@ function assignLanes(
       duration: dur,
       kind,
       isHold: kind !== NoteKind.TAP, // HOLD/RELEASE共通: 押しっぱなし系ノート
+      isTrace: false, // markTraceNotes で高密度連打を TRACE に昇格
+      streamPrev: -1, // TRACE ストリーム内の直前ノート index（連結描画用）
+      streamNext: -1, // TRACE ストリーム内の直後ノート index
       hit: false,
       missed: false,
       judgment: null,
@@ -414,6 +417,10 @@ export function thinNotes(
     maxSimultaneous,
   );
 
+  // Step 3: 同一レーンの高密度 TAP 連打を TRACE ストリームに変換
+  // （HOLD/RELEASE はそのまま。間引き後の実プレイ密度で判定する）
+  markTraceNotes(result, cfg.traceMaxGap ?? TRACE_MAX_GAP);
+
   if (typeof cfg.onDensityMeasured === "function") {
     const duration = candidates.length
       ? candidates[candidates.length - 1].startTime - candidates[0].startTime
@@ -425,6 +432,57 @@ export function thinNotes(
   }
 
   return result;
+}
+
+/**
+ * 同一レーンで TRACE_MAX_GAP 以下の間隔で連続する TAP を TRACE に変換する。
+ * 2本以上の連なりだけを対象にし、孤立した TAP はそのまま残す。
+ * 各 TRACE に streamPrev / streamNext インデックスを付け、描画時に
+ * ノート同士を「くっついた帯」として連結できるようにする。
+ */
+function markTraceNotes(notes, maxGap = TRACE_MAX_GAP) {
+  if (!notes || notes.length < TRACE_MIN_COUNT) return;
+
+  // レーンごとに開始時刻順のインデックス列を作る（notes 自体は全体 startTime 昇順）
+  const byLane = new Map();
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    if (n.kind !== NoteKind.TAP) continue;
+    let arr = byLane.get(n.lane);
+    if (!arr) {
+      arr = [];
+      byLane.set(n.lane, arr);
+    }
+    arr.push(i);
+  }
+
+  for (const indices of byLane.values()) {
+    if (indices.length < TRACE_MIN_COUNT) continue;
+
+    // 連続区間を走査してギャップが maxGap 以下のランを TRACE 化
+    let runStart = 0;
+    for (let k = 1; k <= indices.length; k++) {
+      const unbroken = k < indices.length &&
+        (notes[indices[k]].startTime - notes[indices[k - 1]].startTime) <=
+          maxGap;
+      if (unbroken) continue;
+
+      const runLen = k - runStart;
+      if (runLen >= TRACE_MIN_COUNT) {
+        for (let r = runStart; r < k; r++) {
+          const idx = indices[r];
+          const note = notes[idx];
+          note.kind = NoteKind.TRACE;
+          note.isHold = false;
+          note.isTrace = true;
+          // ストリーム内の前後リンク（描画で帯を繋ぐ用）
+          note.streamPrev = r > runStart ? indices[r - 1] : -1;
+          note.streamNext = r < k - 1 ? indices[r + 1] : -1;
+        }
+      }
+      runStart = k;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -444,21 +502,37 @@ export const DEFAULT_JUDGMENT_WINDOWS = {
  *             （終端まで押し続けていればよく、離すタイミングの精度は問わない）
  *   RELEASE : duration >= RELEASE_MIN_DURATION           → 従来のホールド実装相当
  *             （終端ちょうどで離す操作そのものを判定する）
+ *   TRACE   : 同一レーンで TRACE_MAX_GAP 以下の間隔で連なる高密度ストリーム
+ *             （プロセカのトレース相当）。判定ライン通過時にレーンが押されていれば
+ *             PERFECT、押されていなければ MISS。中間判定なし。押下タイミングの
+ *             精密さは問わず「触れている／押し続けている」だけでコンボを繋げる。
+ *             見た目は細いノート＋連続するトレース同士を連結した帯で描画する。
  */
 export const NoteKind = Object.freeze({
   TAP: "tap",
   HOLD: "hold",
   RELEASE: "release",
+  TRACE: "trace",
 });
 
 /** ノート種別の境界 */
 export const HOLD_MIN_DURATION = 0.30; // これ以上の duration → HOLD/RELEASE（0.30s未満はTAP）
 export const RELEASE_MIN_DURATION = 1.00; // これ以上の duration → RELEASE（未満はHOLD）
+/** 同一レーンでこの間隔（秒）以下で連続する TAP 群を TRACE ストリームに変換する。
+ *  0.2s ≒ BPM150 の 16 分音符間隔。これより密な連打は個別タップより「押しっぱなしで
+ *  撫でる」ほうが自然な操作になるため。 */
+export const TRACE_MAX_GAP = 0.20;
+/** トレースをストリームとして成立させる最小本数（2本以上で連結表示・TRACE化）。 */
+export const TRACE_MIN_COUNT = 2;
 // タップノートは常に不透明、ホールド/リリースノートは常にこの固定値で半透明にする。
 // これにより、隣接する tap/hold/release ノート同士でもどちらか一目で区別できる。
 // （不透明度の可変設定は廃止。将来ノート形状を絵文字などにする場合にも
 //   不透明前提のほうが扱いやすいため。）
 export const HOLD_OPACITY = 0.5;
+/** トレース本体の不透明度（細い帯＋連結線で「なぞる」感を出すため半透明寄り）。 */
+export const TRACE_OPACITY = 0.72;
+/** トレースノートの見た目の高さ（タップ noteHeight に対する比率）。細くして区別する。 */
+export const TRACE_HEIGHT_RATIO = 0.42;
 // HOLDノートは「終端まで押していればよい」だけなので、tail判定の基準時刻を
 // 実際の endTime より少し早めた地点にする。これにより早めに指を離しても
 // noteOff側のPERFECT/GREATが取りやすくなる（RELEASEノートは従来通り endTime 基準）。
@@ -963,6 +1037,11 @@ export class RhythmGame {
     const notes = this.#notes;
     const winGood = this.#opts.windows.good;
     const win = this.#opts.windows;
+
+    // トレースのグラブ判定: レーンが押されていれば通過時に自動 PERFECT。
+    // noteIndex より先の TRACE も、すでに押し続けているレーンで拾えるようにする。
+    this.#grazeTraceNotes(t, winGood);
+
     while (this.#noteIndex < notes.length) {
       const note = notes[this.#noteIndex];
       if (note.isHold) {
@@ -984,11 +1063,41 @@ export class RhythmGame {
           if (!note.hit) this.#applyJudgment(Judgment.MISS, note);
           this.#noteIndex++;
         }
+      } else if (note.isTrace || note.kind === NoteKind.TRACE) {
+        // トレース: 押し続けていれば graze 済み。窓を過ぎたら MISS
+        if (t <= note.startTime + winGood) break;
+        if (!note.hit) this.#applyJudgment(Judgment.MISS, note);
+        this.#noteIndex++;
       } else {
         if (t <= note.startTime + winGood) break;
         if (!note.hit) this.#applyJudgment(Judgment.MISS, note);
         this.#noteIndex++;
       }
+    }
+  }
+
+  /**
+   * トレースノートの接触判定。
+   * 判定ライン付近（±good窓）にあり、まだ未判定で、そのレーンが押下中なら
+   * タイミング精度を問わず PERFECT として確定する。
+   * 押しっぱなしでストリーム全体をなぞる操作を想定。
+   */
+  #grazeTraceNotes(t, winGood) {
+    const notes = this.#notes;
+    const start = Math.max(0, this.#noteIndex);
+    // 近傍だけスキャン（先のノートはまだ早い）
+    for (let i = start; i < notes.length; i++) {
+      const note = notes[i];
+      if (note.startTime - t > winGood + 0.05) break;
+      if (!(note.isTrace || note.kind === NoteKind.TRACE)) continue;
+      if (note.hit || note.missed) continue;
+      if (!this.#lanePressed[note.lane]) continue;
+      // まだかなり先（early すぎ）は拾わない。late 側は checkMisses で MISS にする
+      if (t < note.startTime - winGood) continue;
+      if (t > note.startTime + winGood) continue;
+      note.hit = true;
+      this.#applyJudgment(Judgment.PERFECT, note);
+      this.#spawnParticles(note.lane, Judgment.PERFECT);
     }
   }
 
@@ -1021,7 +1130,11 @@ export class RhythmGame {
     }
 
     const note = notes[bestIdx];
-    const judgment = bestDist <= win.perfect
+    // トレースは接触さえすれば常に PERFECT（中間判定なし）
+    const isTrace = note.isTrace || note.kind === NoteKind.TRACE;
+    const judgment = isTrace
+      ? Judgment.PERFECT
+      : bestDist <= win.perfect
       ? Judgment.PERFECT
       : bestDist <= win.great
       ? Judgment.GREAT
@@ -1625,15 +1738,20 @@ export class RhythmGame {
       if (yBot < 0) continue;
 
       const color = laneColors[note.lane % laneColorLen];
+      const isTrace = note.isTrace || note.kind === NoteKind.TRACE;
       // HOLDノーツは彩度を落とした色にして、レーン色そのままのRELEASE/TAPと
       // パッと見で区別できるようにする（マーカーの有無と合わせて二重に判別しやすくする）。
+      // TRACE は少し明るめ＋細帯で「なぞる」感を出す。
       const bodyColor = note.isHold && note.kind === NoteKind.HOLD
         ? desaturateColor(color, 0.55)
+        : isTrace
+        ? color
         : color;
       const laneIdx = note.lane;
       const botNoteW = this.#perspLaneW(laneW, cW, yBot, hitY, p, btnBot) -
         pad * 2 * this.#perspScale(yBot, hitY, p);
       const r = Math.min(8 * d, botNoteW / 2);
+      const traceH = noteHeight * TRACE_HEIGHT_RATIO;
 
       ctx.shadowColor = bodyColor;
 
@@ -1682,21 +1800,26 @@ export class RhythmGame {
       // ── miss / 判定ライン通過後の未hitノート ─────────────────────────
       if (note.missed || (!note.hit && yBot > hitY)) {
         const drawBot = yBot > H ? H : yBot;
-        // タップノートは通過後もfixed高さのまま（duration由来の長さにしない）
+        // タップ/トレースは通過後も fixed 高さのまま（duration由来の長さにしない）
+        const hMiss = isTrace ? traceH : noteHeight;
         const drawTop = note.isHold
           ? (yTop < 0 ? 0 : yTop)
-          : Math.max(0, drawBot - noteHeight);
+          : Math.max(0, drawBot - hMiss);
         if (drawBot <= drawTop) continue;
-        const baseAlpha = note.isHold ? HOLD_OPACITY : 1;
+        const baseAlpha = note.isHold
+          ? HOLD_OPACITY
+          : isTrace
+          ? TRACE_OPACITY
+          : 1;
         drawTrap(laneIdx, drawTop, drawBot, bodyColor, baseAlpha * 0.55, r);
         continue;
       }
 
-      // ── 通常（未hit タップ / ホールド・リリース未到達） ──────────────
+      // ── 通常（未hit タップ / トレース / ホールド・リリース未到達） ─────
       const isHold = note.isHold;
       const drawTop = yTop < 0 ? 0 : yTop;
       const drawBot = yBot > hitY ? hitY : yBot;
-      if (drawBot <= drawTop) continue;
+      if (drawBot <= drawTop && !isTrace) continue;
 
       if (isHold) {
         // 半透明の本体と、押す/離す位置の不透明キャップ（タップノート同様）を
@@ -1738,6 +1861,159 @@ export class RhythmGame {
         ctx.shadowBlur = 0;
         drawTrapStroke(laneIdx, drawTop, drawBot, o.uiColor, 0.9, 2 * d);
         ctx.shadowBlur = glow ? 14 * d : 0;
+      } else if (isTrace) {
+        // トレースノート: 細い本体 ＋ 直後のトレースまで帯で連結（くっついた表示）
+        // 連結帯は「このノート → 次ノート」の区間だけ描き、二重描画を避ける。
+        const tapBot = Math.min(hitY, yBot);
+        const tapTop = Math.max(0, tapBot - traceH);
+        if (tapBot > tapTop) {
+          // 本体は少し幅を狭めて「細い線」感を出す
+          const narrowPad = pad + Math.max(2 * d, laneW * 0.12);
+          const drawTrapNarrow = (yT, yB, fill, alpha) => {
+            const scB = this.#perspScale(yB, hitY, p);
+            const scT = this.#perspScale(yT, hitY, p);
+            const xBL = this.#perspX(laneIdx, laneW, cW, yB, hitY, p, btnBot) +
+              narrowPad * scB;
+            const xBR =
+              this.#perspX(laneIdx + 1, laneW, cW, yB, hitY, p, btnBot) -
+              narrowPad * scB;
+            const xTL = this.#perspX(laneIdx, laneW, cW, yT, hitY, p, btnBot) +
+              narrowPad * scT;
+            const xTR =
+              this.#perspX(laneIdx + 1, laneW, cW, yT, hitY, p, btnBot) -
+              narrowPad * scT;
+            if (xBR <= xBL || xTR <= xTL) return;
+            ctx.globalAlpha = alpha < 0 ? 0 : alpha;
+            ctx.fillStyle = fill;
+            if (!p) {
+              const h = yB - yT;
+              ctx.beginPath();
+              ctx.roundRect(
+                xBL,
+                yT,
+                xBR - xBL,
+                h,
+                Math.min(4 * d, (xBR - xBL) / 2, h / 2),
+              );
+              ctx.fill();
+            } else {
+              ctx.beginPath();
+              ctx.moveTo(xBL, yB);
+              ctx.lineTo(xBR, yB);
+              ctx.lineTo(xTR, yT);
+              ctx.lineTo(xTL, yT);
+              ctx.closePath();
+              ctx.fill();
+            }
+          };
+
+          drawTrapNarrow(tapTop, tapBot, bodyColor, TRACE_OPACITY);
+
+          // 次のトレースまで細い連結帯を伸ばす（ノート同士がくっついて見える）
+          if (note.streamNext >= 0) {
+            const next = notes[note.streamNext];
+            if (next && !next.hit && !next.missed) {
+              const nextYBot = hitY - (next.startTime - t) * speed;
+              const linkTop = Math.max(0, nextYBot - traceH * 0.5);
+              const linkBot = Math.min(hitY, tapTop);
+              if (linkBot > linkTop) {
+                // 連結帯はさらに細く・半透明
+                const linkPad = pad + Math.max(4 * d, laneW * 0.22);
+                const scB = this.#perspScale(linkBot, hitY, p);
+                const scT = this.#perspScale(linkTop, hitY, p);
+                const xBL =
+                  this.#perspX(laneIdx, laneW, cW, linkBot, hitY, p, btnBot) +
+                  linkPad * scB;
+                const xBR =
+                  this.#perspX(
+                    laneIdx + 1,
+                    laneW,
+                    cW,
+                    linkBot,
+                    hitY,
+                    p,
+                    btnBot,
+                  ) - linkPad * scB;
+                const xTL =
+                  this.#perspX(laneIdx, laneW, cW, linkTop, hitY, p, btnBot) +
+                  linkPad * scT;
+                const xTR =
+                  this.#perspX(
+                    laneIdx + 1,
+                    laneW,
+                    cW,
+                    linkTop,
+                    hitY,
+                    p,
+                    btnBot,
+                  ) - linkPad * scT;
+                if (xBR > xBL && xTR > xTL) {
+                  ctx.globalAlpha = TRACE_OPACITY * 0.55;
+                  ctx.fillStyle = bodyColor;
+                  ctx.beginPath();
+                  if (!p) {
+                    ctx.roundRect(
+                      xBL,
+                      linkTop,
+                      xBR - xBL,
+                      linkBot - linkTop,
+                      Math.min(3 * d, (xBR - xBL) / 2),
+                    );
+                  } else {
+                    ctx.moveTo(xBL, linkBot);
+                    ctx.lineTo(xBR, linkBot);
+                    ctx.lineTo(xTR, linkTop);
+                    ctx.lineTo(xTL, linkTop);
+                    ctx.closePath();
+                  }
+                  ctx.fill();
+                }
+              }
+            }
+          }
+
+          // 細い縁取りでタップと区別
+          ctx.shadowBlur = 0;
+          ctx.globalAlpha = 0.85;
+          ctx.strokeStyle = o.uiColor;
+          ctx.lineWidth = 1.5 * d;
+          {
+            const scB = this.#perspScale(tapBot, hitY, p);
+            const scT = this.#perspScale(tapTop, hitY, p);
+            const xBL =
+              this.#perspX(laneIdx, laneW, cW, tapBot, hitY, p, btnBot) +
+              narrowPad * scB;
+            const xBR =
+              this.#perspX(laneIdx + 1, laneW, cW, tapBot, hitY, p, btnBot) -
+              narrowPad * scB;
+            const xTL =
+              this.#perspX(laneIdx, laneW, cW, tapTop, hitY, p, btnBot) +
+              narrowPad * scT;
+            const xTR =
+              this.#perspX(laneIdx + 1, laneW, cW, tapTop, hitY, p, btnBot) -
+              narrowPad * scT;
+            if (xBR > xBL && xTR > xTL) {
+              ctx.beginPath();
+              if (!p) {
+                ctx.roundRect(
+                  xBL,
+                  tapTop,
+                  xBR - xBL,
+                  tapBot - tapTop,
+                  Math.min(4 * d, (xBR - xBL) / 2),
+                );
+              } else {
+                ctx.moveTo(xBL, tapBot);
+                ctx.lineTo(xBR, tapBot);
+                ctx.lineTo(xTR, tapTop);
+                ctx.lineTo(xTL, tapTop);
+                ctx.closePath();
+              }
+              ctx.stroke();
+            }
+          }
+          ctx.shadowBlur = glow ? 14 * d : 0;
+        }
       } else {
         // タップノート: 実際の duration に関わらず、見た目の高さは固定（noteHeight）。
         // 実演奏データでは noteOff と次の noteOn がほぼ密着しているケースが多く、
