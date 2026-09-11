@@ -78,7 +78,7 @@ const DEFAULT_CONFIG = {
     "#66ffcc",
     "#ff66cc",
   ],
-  difficulty: "NORMAL",
+  difficulty: "BASIC",
   laneOpacity: 0.35, // 0(透明)〜1(最大まで濃い) の通常の opacity と同じスケール
   perspectiveEnabled: true, // 遠近感（画面上側が狭くなる表示）のON/OFF
   judgeOffset: 0, // ms (正=遅く/音が遅い環境, 負=早く)
