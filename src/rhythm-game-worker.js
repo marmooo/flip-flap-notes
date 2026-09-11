@@ -57,7 +57,15 @@ self.onmessage = (e) => {
     }
 
     case "stop": {
-      if (game) game.stop();
+      if (game) {
+        // 曲終了で tick が止まる前に未確定ホールド等を確定し、
+        // judgmentDetail + ended を送る（スコアが 0 のまま結果画面に
+        // 行かないようにする）
+        if (msg.finalize !== false) {
+          game.finalize(msg.currentTime);
+        }
+        game.stop();
+      }
       break;
     }
 

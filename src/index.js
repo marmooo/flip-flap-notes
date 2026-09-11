@@ -114,7 +114,7 @@ function loadConfig() {
   try {
     const loaded = {
       ...DEFAULT_CONFIG,
-      ...JSON.parse(localStorage.getItem("TipTapNotesConfig") || "{}"),
+      ...JSON.parse(localStorage.getItem("FlipFlapNotesConfig") || "{}"),
     };
     // 過去の不具合で laneKeys: [] が保存されている場合にキーコンフィグが
     // 全滅しないよう、空・不足分は既定値で補完する。
@@ -564,10 +564,12 @@ function onWorkerMessage(e) {
       //   収束させ、リプレイは seekTo(0)+resume() で再開できる。
       // maxDuration 有限（実尺 > SHORT の SHORT）:
       //   120s 強制終了用のフェードへ。ノート消化が先に来た場合も同様。
+      // finalize 付き stop（曲終了・SHORTフェード完了）からもここに来る。
+      // その場合は endingFadeStarted や maxDuration 到達済みなので即 showResult。
       if (gamePhase !== "playing") break;
       // ユーザー一時停止中の tick / midy.pause 由来の誤 ended でスコア画面に行かない
       if (isPaused || userInitiatedMidiPause) break;
-      if (maxDuration === Infinity) {
+      if (maxDuration === Infinity || endingFadeStarted) {
         stopRaf();
         showResult();
         if (mode === "midi") systemPauseMidi();
@@ -679,7 +681,8 @@ function startRaf() {
     // DOM 表示（#scoreDisplay）への書き戻しは毎フレームここでまとめて行う
     // （以前は Canvas 側で毎フレーム再描画していたのと同じ頻度・同じ場所）。
     if (scoreDisplay) {
-      scoreDisplay.textContent = String(lastResult.score).padStart(7, "0");
+      scoreDisplay.textContent = String(Math.round(Number(lastResult.score) || 0))
+        .padStart(7, "0");
     }
     // handleShortEnding() が showResult()→stopRaf() を呼んで rafId を null に
     // していたら、ここで再度スケジュールしてしまわないようにする。
@@ -751,12 +754,34 @@ function completeShortEnding() {
     endingFadeTimeoutId = null;
   }
   stopRaf();
-  showResult();
-  if (mode === "midi") {
-    systemPauseMidi();
-  } else {
+  // 未確定ホールドを確定してから judgmentDetail → ended → showResult へ
+  let t = 0;
+  try {
+    t = currentGameTime();
+  } catch {
+    /* ignore */
+  }
+  try {
+    worker?.postMessage({ type: "stop", currentTime: t, finalize: true });
+  } catch (err) {
+    console.error("worker stop failed:", err);
+    showResult();
+    if (mode === "midi") {
+      systemPauseMidi();
+    } else {
+      suppressPauseHandling = true;
+      player.pause();
+    }
+    return;
+  }
+  // MIDI/audio の停止は ended ハンドラ側（showResult 後）で行う
+  if (mode === "audio") {
     suppressPauseHandling = true;
-    player.pause();
+    try {
+      player.pause();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -980,11 +1005,11 @@ function showResult() {
     endingFadeTimeoutId = null;
   }
   clearAudioLeadIn();
-  // stop で描画ループ・アクティブ判定を止める。
+  // stop で描画ループを止める（finalize は ended 経路で済んでいる想定）。
   // 譜面配列自体は Worker に残し、リプレイ時の setNotes 再送（structured clone）を
   // 避ける。高負荷 MIDI ではこの clone がピークメモリを押し上げる一因になる。
   try {
-    worker?.postMessage({ type: "stop" });
+    worker?.postMessage({ type: "stop", finalize: false });
   } catch (err) {
     console.error("worker stop failed:", err);
   }
@@ -992,6 +1017,9 @@ function showResult() {
   isPaused = false;
   hidePlayHud();
   setWrapHeight(); // フルスクリーン表示から通常レイアウトに戻す
+
+  // 表示用に整数へ丸める（内部は浮動小数で積算）
+  lastResult.score = Math.round(Number(lastResult.score) || 0);
 
   const judged = lastResult.perfect + lastResult.great + lastResult.good +
     lastResult.miss;
@@ -1427,7 +1455,7 @@ document.getElementById("btnApplySettings").addEventListener(
 document.getElementById("btnResetAllSettings")?.addEventListener(
   "click",
   async () => {
-    localStorage.removeItem("TipTapNotesConfig");
+    localStorage.removeItem("FlipFlapNotesConfig");
     localStorage.removeItem("darkMode");
     try {
       await new Promise((resolve, reject) => {
@@ -1783,7 +1811,11 @@ function stopAllPlayback() {
   } catch (err) {
     console.error("player.pause failed:", err);
   }
-  worker?.postMessage({ type: "stop" });
+  try {
+    worker?.postMessage({ type: "stop", finalize: false });
+  } catch {
+    /* ignore */
+  }
 }
 
 function switchMode(next) {
@@ -2337,21 +2369,38 @@ midy.addEventListener("resumed", () => {
 
 midy.addEventListener("stopped", () => {
   if (mode !== "midi") return;
-  worker?.postMessage({ type: "stop" });
   // ユーザー一時停止中の誤 stopped ではスコア画面に行かない
   if (isPaused || userInitiatedMidiPause) return;
   // プレイ中の自然終了:
   // - すでにフェード中なら setTimeout / completeShortEnding に完了を任せる
-  // - 未フェードなら音楽は既に止まっているのでスコア画面へ。
+  // - 未フェードなら Worker に finalize 付き stop を送り、judgmentDetail→ended
+  //   経由で showResult する（未確定ホールドを確定してからスコアを確定する）
   if (gamePhase === "playing") {
     if (endingFadeStarted) {
       return;
     }
     stopRaf();
-    showResult();
-    systemPauseMidi();
+    let t = 0;
+    try {
+      t = currentGameTime();
+    } catch {
+      /* ignore */
+    }
+    try {
+      worker?.postMessage({ type: "stop", currentTime: t, finalize: true });
+    } catch (err) {
+      console.error("worker stop failed:", err);
+      showResult();
+      systemPauseMidi();
+    }
+    // ended メッセージ側で showResult + systemPauseMidi する
   } else {
     stopRaf();
+    try {
+      worker?.postMessage({ type: "stop", finalize: false });
+    } catch {
+      /* ignore */
+    }
   }
 });
 
@@ -2622,7 +2671,19 @@ player.addEventListener("ended", () => {
   if (mode !== "audio") return;
   if (gamePhase === "playing") {
     stopRaf();
-    showResult();
+    // 未確定ホールドを確定してから judgmentDetail → ended → showResult
+    let t = 0;
+    try {
+      t = currentGameTime();
+    } catch {
+      /* ignore */
+    }
+    try {
+      worker?.postMessage({ type: "stop", currentTime: t, finalize: true });
+    } catch (err) {
+      console.error("worker stop failed:", err);
+      showResult();
+    }
   }
 });
 

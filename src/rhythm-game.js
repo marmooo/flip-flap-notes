@@ -614,6 +614,7 @@ export class RhythmGame {
   onJudgment = null;
   onEnded = null;
 
+  #endedFired = false;
   #canvas;
   #ctx;
   #pCanvas;
@@ -762,8 +763,72 @@ export class RhythmGame {
     this.#updateFx(dt);
     this.#draw(t);
     if (this.#noteIndex >= this.#notes.length && this.#particles.length === 0) {
-      this.onEnded?.();
+      this.#fireEnded();
     }
+  }
+
+  /**
+   * 曲終了・強制終了時に未確定ノートを確定する。
+   * ホールド中の tail や noteIndex より後ろの未判定ノートを残したまま
+   * rAF/tick を止めるとスコアがほぼ 0 のまま結果画面に行くため、
+   * 結果確定前に必ず呼ぶ。
+   */
+  finalize(t = this.#lastTickTime) {
+    if (this.#endedFired) return;
+    const notes = this.#notes;
+    const win = this.#opts.windows;
+
+    // 1) アクティブなホールドを tail 判定で確定
+    for (let lane = 0; lane < this.#laneHold.length; lane++) {
+      const holdIdx = this.#laneHold[lane];
+      if (holdIdx === -1) continue;
+      const note = notes[holdIdx];
+      if (!note || !note.holdActive) {
+        this.#laneHold[lane] = -1;
+        continue;
+      }
+      const tailJ = note.kind === NoteKind.HOLD
+        ? this.#judgeHoldTail(note, t, win)
+        : this.#judgeReleaseTail(note, t, win);
+      this.#applyHoldTail(note, tailJ);
+      this.#laneHold[lane] = -1;
+    }
+
+    // 2) noteIndex 以降の未判定ノートを MISS として消化
+    //    （ホールド head 未ヒットも含む）
+    while (this.#noteIndex < notes.length) {
+      const note = notes[this.#noteIndex];
+      if (note.holdActive) {
+        // 上のループで処理済みのはずだが、念のため
+        const tailJ = note.kind === NoteKind.HOLD
+          ? this.#judgeHoldTail(note, t, win)
+          : this.#judgeReleaseTail(note, t, win);
+        this.#applyHoldTail(note, tailJ);
+        this.#laneHold[note.lane] = -1;
+      } else if (!note.hit && !note.missed) {
+        this.#applyJudgment(Judgment.MISS, note);
+      }
+      this.#noteIndex++;
+    }
+
+    // 3) noteIndex より前に残った未判定（レーン跨ぎでヒットされなかったもの等）
+    for (let i = 0; i < notes.length; i++) {
+      const note = notes[i];
+      if (note.hit || note.missed) continue;
+      if (note.holdActive) {
+        const tailJ = note.kind === NoteKind.HOLD
+          ? this.#judgeHoldTail(note, t, win)
+          : this.#judgeReleaseTail(note, t, win);
+        this.#applyHoldTail(note, tailJ);
+        this.#laneHold[note.lane] = -1;
+      } else {
+        this.#applyJudgment(Judgment.MISS, note);
+      }
+    }
+
+    // パーティクル待ちで onEnded が発火しない場合に備えて即通知
+    this.#particles.length = 0;
+    this.#fireEnded();
   }
 
   stop() {
@@ -940,7 +1005,7 @@ export class RhythmGame {
   }
 
   get score() {
-    return this.#score;
+    return Math.round(this.#score);
   }
   get combo() {
     return this.#combo;
@@ -992,6 +1057,7 @@ export class RhythmGame {
     this.#noteIndex = 0;
     this.#drawCursor = 0;
     this.#lastTickTime = 0;
+    this.#endedFired = false;
     this.#judgmentFx = [];
     this.#particles = [];
     this.#uiDirty = true;
@@ -1007,6 +1073,12 @@ export class RhythmGame {
       n.holdActive = false;
       n.holdHeadJudgment = null;
     }
+  }
+
+  #fireEnded() {
+    if (this.#endedFired) return;
+    this.#endedFired = true;
+    this.onEnded?.();
   }
 
   #invalidateCache() {
@@ -1025,7 +1097,7 @@ export class RhythmGame {
     this.#draw(t);
     if (this.#noteIndex >= this.#notes.length && this.#particles.length === 0) {
       this.stop();
-      this.onEnded?.();
+      this.#fireEnded();
       return;
     }
     this.#animId = requestAnimationFrame(this.#boundLoop);
@@ -1180,7 +1252,9 @@ export class RhythmGame {
         ratio = 0.50;
         this.#goodCount++;
       }
-      this.#score = Math.round(this.#score + basePerNote * ratio);
+      // 毎回 Math.round すると basePerNote が小数のときに加算が潰れて
+      // スコアがほぼ 0 のままになる。内部は浮動小数で積み、getter で丸める。
+      this.#score += basePerNote * ratio;
     }
     this.#judgedNotes++;
     this.#judgmentFx.push({ judgment, lane: note.lane, alpha: 1.0 });
@@ -1193,8 +1267,8 @@ export class RhythmGame {
     note.holdActive = false;
     note.hit = true;
     note.missed = judgment === Judgment.MISS;
-    // hold tail は1ノート分のスコアをheadとtailに50:50で配分する設計
-    // （totalNotesはthinNotes後のノート数なのでそのまま使う）
+    // ホールドは head+tail で1ノート分。スコアは tail 確定時にまとめて付与する
+    // （totalNotes は thinNotes 後のノート数）
     const basePerNote = this.#opts.totalNotes > 0
       ? 1_000_000 / this.#opts.totalNotes
       : 0;
@@ -1216,7 +1290,7 @@ export class RhythmGame {
         ratio = 0.50;
         this.#goodCount++;
       }
-      this.#score = Math.round(this.#score + basePerNote * ratio);
+      this.#score += basePerNote * ratio;
       this.#spawnParticles(note.lane, judgment);
     }
     this.#judgedNotes++;
