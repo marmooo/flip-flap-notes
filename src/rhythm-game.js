@@ -1801,6 +1801,59 @@ export class RhythmGame {
       }
     };
 
+    // RELEASEノーツの終端（手を離す場所）専用マーカー。
+    // 「》」を90°回転して縦置きにした形＝上向きの二段シェブロン(⌃⌃)で、
+    // 「ここで上へ手を離す」を直感的に示す。ノート本体（drawTrap）と同じく
+    // 上下で異なるパース位置・幅を個別計算し、遠近感の歪みを合わせる。
+    const drawReleaseChevron = (laneIdx, yCenter, color, alpha) => {
+      // rowHを高く・halfWFracを狭くするほど山の角度が尖る。
+      // gapは段同士がくっつかないよう、rowHより広めに取る。
+      const rowH = Math.max(7 * d, noteHeight * 0.42);
+      const gap = rowH * 1.15;
+      const halfWFrac = 0.4;
+      const lineWidth = Math.max(4 * d, noteHeight * 0.24);
+
+      // 指定y位置でのレーン中心・半幅（ノート本体と同じパース計算を再利用）。
+      // 太さ分だけストロークが外側にはみ出るので、その分を半幅から差し引いて
+      // ノート／レーン幅からはみ出さないようにする。ただし遠近感で奥のレーン幅が
+      // 狭くなっても0にはせず、最低限の太さは保って消えないようにする。
+      const laneGeom = (y) => {
+        const sc = this.#perspScale(y, hitY, p);
+        const xL = this.#perspX(laneIdx, laneW, cW, y, hitY, p, btnBot) +
+          pad * sc;
+        const xR = this.#perspX(laneIdx + 1, laneW, cW, y, hitY, p, btnBot) -
+          pad * sc;
+        const halfW = Math.max(
+          1 * d,
+          (xR - xL) * halfWFrac - lineWidth / 2,
+        );
+        return { cx: (xL + xR) / 2, halfW };
+      };
+
+      ctx.save();
+      ctx.globalAlpha = alpha < 0 ? 0 : alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      // 山形記章のような角ばった印象にするため、線端は角ばった butt、
+      // 頂点は尖った miter にする（丸みは付けない）。
+      ctx.lineCap = "butt";
+      ctx.lineJoin = "miter";
+      ctx.miterLimit = 4;
+      for (let row = 0; row < 2; row++) {
+        // 上向き（⌃）: 頂点が上（yが小さい）、両翼が下（yが大きい）
+        const yTip = yCenter - rowH / 2 - row * gap;
+        const yWing = yTip + rowH;
+        const tip = laneGeom(yTip);
+        const wing = laneGeom(yWing);
+        ctx.beginPath();
+        ctx.moveTo(wing.cx - wing.halfW, yWing);
+        ctx.lineTo(tip.cx, yTip);
+        ctx.lineTo(wing.cx + wing.halfW, yWing);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
     for (let i = this.#drawCursor; i < notes.length; i++) {
       const note = notes[i];
 
@@ -1842,24 +1895,11 @@ export class RhythmGame {
         if (drawH <= 0) continue;
         const pulse = 0.75 + 0.25 * Math.sin(t * 8);
         if (note.kind === NoteKind.RELEASE) {
-          // リリースノーツ: 終端に小さめの不透明キャップを乗せ、
-          // 本体（半透明）との境目はグラデーションでなめらかになじませる。
-          const capOffset = Math.min(
-            0.49,
-            (noteHeight * CAP_HEIGHT_RATIO) / drawH,
-          );
-          const blendOffset = Math.min(
-            0.49 - capOffset,
-            (CAP_BLEND_PX * d) / drawH,
-          );
-          const opaque = withAlpha(bodyColor, pulse);
+          // リリースノーツ: 終端（手を離す場所）はキャップではなく縦向き
+          // シェブロン（》を90°回転した形）で示すため、本体は均一なソフト
+          // 表示にする。
           const soft = withAlpha(bodyColor, HOLD_OPACITY * pulse);
-          const grad = ctx.createLinearGradient(0, drawTop, 0, drawBot);
-          grad.addColorStop(0, opaque);
-          grad.addColorStop(capOffset, opaque);
-          grad.addColorStop(capOffset + blendOffset, soft);
-          grad.addColorStop(1, soft);
-          drawTrap(laneIdx, drawTop, drawBot, grad, 1, r);
+          drawTrap(laneIdx, drawTop, drawBot, soft, 1, r);
         } else {
           drawTrap(
             laneIdx,
@@ -1872,6 +1912,12 @@ export class RhythmGame {
         }
         ctx.shadowBlur = 0;
         drawTrapStroke(laneIdx, drawTop, drawBot, o.uiColor, 0.9, 2 * d);
+        if (note.kind === NoteKind.RELEASE) {
+          // 終端＝手を離す場所を強調する上向きシェブロン。判定ラインに
+          // 近づくほどここまで下がってくるので、離すタイミングが分かる。
+          const chevronY = drawTop + Math.max(15 * d, noteHeight * 0.75);
+          drawReleaseChevron(laneIdx, chevronY, o.uiColor, pulse);
+        }
         ctx.shadowBlur = glow ? 14 * d : 0;
         continue;
       }
@@ -1901,13 +1947,14 @@ export class RhythmGame {
       if (drawBot <= drawTop && !isTrace) continue;
 
       if (isHold) {
-        // 半透明の本体と、押す/離す位置の不透明キャップ（タップノート同様）を
-        // 1本のグラデーションとして描き、境目をわずかになじませる。
-        //   HOLD    : 頭のキャップのみ。終端はそのまま透明にフェードさせ、
+        // 半透明の本体に、頭（押す位置）は不透明キャップを乗せてタップ
+        // ノートと同様に強調する。終端（離す位置）の扱いはkindで変える。
+        //   HOLD    : 終端はそのまま透明にフェードさせ、
         //             「正確に離す必要はない」ことを示す。
-        //   RELEASE : 頭・終端の両方に小さめのキャップを乗せ、
-        //             「正確に押して正確に離す」ことを示す。
-        // タップノートと見分けが付くよう、キャップはタップより小さく・
+        //   RELEASE : 終端はキャップではなく縦向きシェブロン（》を90°
+        //             回転した下向き二段矢印）を重ねて描き、
+        //             「ここで正確に手を離す」ことを強調する。
+        // タップノートと見分けが付くよう、頭のキャップはタップより小さく・
         // 本体とのなじみ幅は広めにとる。
         const total = drawBot - drawTop;
         const capOffset = Math.min(
@@ -1923,9 +1970,9 @@ export class RhythmGame {
 
         const grad = ctx.createLinearGradient(0, drawTop, 0, drawBot);
         if (note.kind === NoteKind.RELEASE) {
-          grad.addColorStop(0, opaque);
-          grad.addColorStop(capOffset, opaque);
-          grad.addColorStop(capOffset + blendOffset, soft);
+          // 終端（endTime側 = offset0, 手を離す位置）はキャップではなく
+          // 縦向きシェブロンで示すため、本体はソフトなまま保つ。
+          grad.addColorStop(0, soft);
         } else {
           // HOLD: 終端（endTime側 = offset0）は完全に透明までフェードさせる
           const tailFadeOffset = Math.min(0.3, (60 * d) / total);
@@ -1939,6 +1986,11 @@ export class RhythmGame {
 
         ctx.shadowBlur = 0;
         drawTrapStroke(laneIdx, drawTop, drawBot, o.uiColor, 0.9, 2 * d);
+        if (note.kind === NoteKind.RELEASE) {
+          // 終端＝手を離す場所を縦向きの》（上向き二段シェブロン）で強調する。
+          const chevronY = drawTop + Math.max(15 * d, noteHeight * 0.75);
+          drawReleaseChevron(laneIdx, chevronY, o.uiColor, 0.95);
+        }
         ctx.shadowBlur = glow ? 14 * d : 0;
       } else if (isTrace) {
         // トレースノート: 細い本体 ＋ 直後のトレースまで帯で連結（くっついた表示）
