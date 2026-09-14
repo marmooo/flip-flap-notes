@@ -1177,14 +1177,18 @@ export class RhythmGame {
     const win = this.#opts.windows;
     const notes = this.#notes;
     let bestIdx = -1, bestDist = Infinity;
+    let nearestLaneDist = Infinity;
     const start = Math.max(0, this.#noteIndex);
     const limit = win.good + 0.05;
+    const obviousMissMargin = win.good * 2;
+    const scanLimit = Math.max(limit, obviousMissMargin);
 
     for (let i = start; i < notes.length; i++) {
       const note = notes[i];
-      if (note.startTime - t > limit) break;
+      if (note.startTime - t > scanLimit) break;
       if (note.hit || note.missed || note.lane !== lane) continue;
       const dist = Math.abs(t - note.startTime);
+      if (dist < nearestLaneDist) nearestLaneDist = dist;
       if (dist <= win.good && dist < bestDist) {
         bestDist = dist;
         bestIdx = i;
@@ -1192,6 +1196,7 @@ export class RhythmGame {
     }
 
     if (bestIdx === -1) {
+      if (nearestLaneDist > obviousMissMargin) return; // 明らかに判定外 → コンボ維持
       const last = this.#laneLastEmpty[lane];
       if (t - last < win.good) return;
       this.#laneLastEmpty[lane] = t;
@@ -1998,29 +2003,27 @@ export class RhythmGame {
                 const xBL =
                   this.#perspX(laneIdx, laneW, cW, linkBot, hitY, p, btnBot) +
                   linkPad * scB;
-                const xBR =
-                  this.#perspX(
-                    laneIdx + 1,
-                    laneW,
-                    cW,
-                    linkBot,
-                    hitY,
-                    p,
-                    btnBot,
-                  ) - linkPad * scB;
+                const xBR = this.#perspX(
+                  laneIdx + 1,
+                  laneW,
+                  cW,
+                  linkBot,
+                  hitY,
+                  p,
+                  btnBot,
+                ) - linkPad * scB;
                 const xTL =
                   this.#perspX(laneIdx, laneW, cW, linkTop, hitY, p, btnBot) +
                   linkPad * scT;
-                const xTR =
-                  this.#perspX(
-                    laneIdx + 1,
-                    laneW,
-                    cW,
-                    linkTop,
-                    hitY,
-                    p,
-                    btnBot,
-                  ) - linkPad * scT;
+                const xTR = this.#perspX(
+                  laneIdx + 1,
+                  laneW,
+                  cW,
+                  linkTop,
+                  hitY,
+                  p,
+                  btnBot,
+                ) - linkPad * scT;
                 if (xBR > xBL && xTR > xTL) {
                   ctx.globalAlpha = TRACE_OPACITY * 0.55;
                   ctx.fillStyle = bodyColor;
