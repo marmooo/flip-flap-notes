@@ -1866,6 +1866,7 @@ function switchMode(next) {
 
 const audioContext = new AudioContext();
 const midy = new Midy(audioContext);
+midy.prerollSec = 20;
 midy.cacheMode = CACHE_MODES.includes(config.cacheMode)
   ? config.cacheMode
   : "chunk";
