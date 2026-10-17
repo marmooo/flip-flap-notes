@@ -6,6 +6,7 @@ trace notes. You can also play MIDI files directly and change the sound source
 using SoundFonts (SF2/SF3).
 
 - [フリーゲーム夢現](https://freegame-mugen.jp/puzzle/game_15574.html)
+- [itch.io](https://marmooo-games.itch.io/flip-flap-notes)
 
 ## Screenshots
 
