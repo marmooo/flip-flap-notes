@@ -1696,8 +1696,10 @@ export class RhythmGame {
         this.#drawCursor++;
         continue;
       }
-      // miss or 未hit通過: endTime のY座標が画面底を抜けるまで保持
-      const yBotTail = hitY - (n.endTime - t) * speed;
+      // miss / 未hitノートは、描画上の終端が画面底を抜けたら破棄する。
+      // タップは固定高さで描くため startTime、ホールドは実長があるため endTime を使う。
+      const tailTime = n.isHold ? n.endTime : n.startTime;
+      const yBotTail = hitY - (tailTime - t) * speed;
       if (yBotTail <= H) break;
       this.#drawCursor++;
     }
