@@ -259,6 +259,8 @@ let maxDuration = Infinity; // applyNotes() 実行時に playLength から算出
 let endingFadeStarted = false; // SHORTモードでの強制終了フェードを開始済みか
 let endingFadeStartPerf = 0; // フェード開始時点の performance.now()（下記参照）
 let endingFadeTimeoutId = null; // rAF停止時でもフェード完了→showResultを保証するタイマー
+let resultAudioFadeIntervalId = null;
+let resultAudioFadeTimeoutId = null;
 
 // applyNotes の再計算・Worker への再送を抑えるキー。リプレイ時に同じ譜面を
 // 何度も thinNotes + structured clone するとピークメモリが跳ねるため、
@@ -564,6 +566,14 @@ function onWorkerMessage(e) {
       document.getElementById("diffLabel").textContent = config.difficulty;
       lastResult.total = msg.count;
       break;
+    case "stopped":
+      // finalize() が既に ended を通知済みの場合も、終了処理の完了を受け取る。
+      if (msg.finalize && gamePhase === "playing") {
+        stopRaf();
+        showResult();
+        if (mode === "midi") systemPauseMidi();
+      }
+      break;
     case "ended": {
       // maxDuration === Infinity（ORIGINAL、または実尺 ≤ SHORT の SHORT）:
       //   ノート消化＝自然終了 → スコア画面。MIDI は systemPause で paused に
@@ -575,6 +585,9 @@ function onWorkerMessage(e) {
       if (gamePhase !== "playing") break;
       // ユーザー一時停止中の tick / midy.pause 由来の誤 ended でスコア画面に行かない
       if (isPaused || userInitiatedMidiPause) break;
+      // SHORTフェード中のノート消化通知では結果を出さず、フェード完了後の
+      // finalize stop の通知を待つ（ended は一度しか発火しないため）。
+      if (endingFadeStarted && mode === "audio" && !player.paused) break;
       if (maxDuration === Infinity || endingFadeStarted) {
         stopRaf();
         showResult();
@@ -1040,6 +1053,37 @@ function showResult() {
     console.error("worker stop failed:", err);
   }
   gamePhase = "result";
+  // SHORT終了フェードを通らない結果遷移でも、2秒フェード後に確実に停止する。
+  if (mode === "audio" && !player.paused && !endingFadeStarted) {
+    const startedAt = performance.now();
+    const startVolume = player.volume;
+    const finishAudio = () => {
+      if (resultAudioFadeIntervalId !== null) {
+        clearInterval(resultAudioFadeIntervalId);
+        resultAudioFadeIntervalId = null;
+      }
+      if (resultAudioFadeTimeoutId !== null) {
+        clearTimeout(resultAudioFadeTimeoutId);
+        resultAudioFadeTimeoutId = null;
+      }
+      player.volume = 0;
+      suppressPauseHandling = true;
+      player.pause();
+    };
+    resultAudioFadeIntervalId = setInterval(() => {
+      const progress = Math.min(
+        1,
+        (performance.now() - startedAt) / (ENDING_FADE_DURATION * 1000),
+      );
+      player.volume = startVolume * (1 - progress);
+      if (progress >= 1) finishAudio();
+    }, 50);
+    // Background tab などで interval が強く間引かれても、停止は必ず完了させる。
+    resultAudioFadeTimeoutId = setTimeout(
+      finishAudio,
+      ENDING_FADE_DURATION * 1000 + 100,
+    );
+  }
   isPaused = false;
   hidePlayHud();
   setWrapHeight(); // フルスクリーン表示から通常レイアウトに戻す
@@ -2691,6 +2735,14 @@ async function loadAudioFile(file) {
 /** 音声モードの1プレイ開始。START_DELAY 秒のリードイン後に <audio> を再生する。 */
 function beginAudioRound() {
   clearAudioLeadIn();
+  if (resultAudioFadeIntervalId !== null) {
+    clearInterval(resultAudioFadeIntervalId);
+    resultAudioFadeIntervalId = null;
+  }
+  if (resultAudioFadeTimeoutId !== null) {
+    clearTimeout(resultAudioFadeTimeoutId);
+    resultAudioFadeTimeoutId = null;
+  }
   // 自前の pause を user-pause と誤認しない
   if (!player.paused) {
     suppressPauseHandling = true;
