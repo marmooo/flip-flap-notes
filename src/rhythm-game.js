@@ -1264,7 +1264,17 @@ export class RhythmGame {
     this.#judgedNotes++;
     this.#judgmentFx.push({ judgment, lane: note.lane, alpha: 1.0 });
     this.#uiDirty = true;
-    this.onJudgment?.(judgment, this.#combo, this.#score);
+    const kind = note.kind ??
+      (note.isTrace ? "trace" : note.isHold ? "hold" : "tap");
+    const duration = Math.max(
+      0,
+      (Number(note.endTime) || 0) - (Number(note.startTime) || 0),
+    );
+    this.onJudgment?.(judgment, this.#combo, this.#score, {
+      lane: note.lane,
+      kind,
+      duration,
+    });
   }
 
   /** ホールドノートのtail判定を確定する */
@@ -1301,7 +1311,16 @@ export class RhythmGame {
     this.#judgedNotes++;
     this.#judgmentFx.push({ judgment, lane: note.lane, alpha: 1.0 });
     this.#uiDirty = true;
-    this.onJudgment?.(judgment, this.#combo, this.#score);
+    const kind = note.kind ?? (note.isTrace ? "trace" : "hold");
+    const duration = Math.max(
+      0,
+      (Number(note.endTime) || 0) - (Number(note.startTime) || 0),
+    );
+    this.onJudgment?.(judgment, this.#combo, this.#score, {
+      lane: note.lane,
+      kind,
+      duration,
+    });
   }
 
   // ---- Private: FX -------------------------------------------------------

@@ -302,6 +302,9 @@ let lastResult = {
   miss: 0,
   total: 0,
 };
+// Judgment order powers the result card's compact play-history timeline.
+let playHistory = [];
+
 let pendingAnalysisResolve = null;
 let pendingAnalysisReject = null;
 
@@ -560,6 +563,12 @@ function onWorkerMessage(e) {
   const msg = e.data;
   switch (msg.type) {
     case "judgment":
+      playHistory.push({
+        judgment: msg.judgment,
+        lane: msg.lane,
+        kind: msg.kind,
+        duration: msg.duration,
+      });
       lastResult.score = msg.score;
       lastResult.combo = Math.max(lastResult.combo, msg.combo);
       updateScoreDisplay(msg.score);
@@ -873,6 +882,7 @@ function beginPlayback() {
   // 音量の復元は startMidiPlayback() 内（midy.start() 直前）で行うため、
   // ここでは MIDI モードの setMasterVolume は不要。audio モードは即時復元で OK。
   if (mode === "audio") player.volume = 1;
+  playHistory = [];
   lastResult = {
     score: 0,
     combo: 0,
@@ -947,6 +957,7 @@ function applyConfigToGame(cfg) {
       buildGame();
       applyNotes();
       worker.postMessage({ type: "start" });
+      playHistory = [];
       lastResult = {
         score: 0,
         combo: 0,
@@ -1151,8 +1162,212 @@ function showResult() {
   if (rLanes) rLanes.textContent = String(config.laneCount);
   if (rScroll) rScroll.textContent = String(config.scrollSpeed);
 
+  drawScoreCard(grade, accStr);
+
   showScreen("result");
 }
+
+function drawScoreCard(grade, accuracy) {
+  const canvas = document.getElementById("scoreCardCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height;
+  const palette = {
+    perfect: "#66b8ff", great: "#64d98b", good: "#ffd166", miss: "#ff5b61",
+  };
+  const gradeColors = {
+    S: "#ffd166", A: "#64d98b", B: "#66b8ff", C: "#ff9a64", D: "#ff5b61",
+  };
+  const accent = gradeColors[grade] || palette.perfect;
+
+  // Background + soft accent glow (circular judgment signature on the right).
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, "#10151b"); bg.addColorStop(0.58, "#151d22");
+  bg.addColorStop(1, "#0d1116");
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+  const glow = ctx.createRadialGradient(870, 315, 10, 870, 315, 560);
+  glow.addColorStop(0, "#66b8ff16"); glow.addColorStop(1, "#66b8ff00");
+  ctx.fillStyle = glow; ctx.fillRect(0, 0, w, h);
+
+  // Product wordmark: Flip (neutral) Flap (accent) Notes.
+  ctx.fillStyle = accent;
+  ctx.beginPath(); ctx.arc(66, 70, 10, 0, Math.PI * 2); ctx.fill();
+  ctx.font = "800 64px system-ui, sans-serif";
+  ctx.fillStyle = "#f5f4ec";
+  ctx.fillText("Flip ", 88, 101);
+  const flapX = 88 + ctx.measureText("Flip ").width;
+  ctx.fillStyle = palette.perfect;
+  ctx.fillText("Flap ", flapX, 101);
+  const notesX = flapX + ctx.measureText("Flap ").width;
+  ctx.fillStyle = "#f5f4ec";
+  ctx.fillText("Notes", notesX, 101);
+  ctx.font = "600 24px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.fillText(`${config.difficulty}   ·   ${config.laneCount} LANES`, 88, 141);
+
+  // Left column: score / accuracy / best combo / judgment counts.
+  const history = playHistory.slice(-100);
+  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.fillText("SCORE", 76, 190);
+  ctx.font = "800 72px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "#f5f4ec";
+  ctx.fillText(String(lastResult.score).padStart(7, "0"), 72, 250);
+  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.fillText("ACCURACY", 76, 310);
+  ctx.font = "800 68px system-ui, sans-serif"; ctx.fillStyle = "#f5f4ec";
+  ctx.fillText(`${accuracy}%`, 72, 370);
+  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.fillText("BEST COMBO", 76, 430);
+  ctx.font = "800 58px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "#f5f4ec";
+  ctx.fillText(String(lastResult.combo), 72, 490);
+  const stats = [
+    ["PERFECT", lastResult.perfect, palette.perfect],
+    ["GREAT", lastResult.great, palette.great],
+    ["GOOD", lastResult.good, palette.good],
+    ["MISS", lastResult.miss, palette.miss],
+  ];
+  for (const [i, [label, value, color]] of stats.entries()) {
+    const x = 76 + i * 103;
+    ctx.font = "700 20px system-ui, sans-serif"; ctx.fillStyle = color;
+    ctx.fillText(label, x, 550);
+    ctx.font = "800 30px system-ui, sans-serif";
+    ctx.fillText(String(value), x, 580);
+  }
+
+  // Halo: chronological ring.
+  // Judgment → color / shape / radius (tip-tap style).
+  // Long notes (hold / release / trace) → arc whose span scales with duration.
+  const center = { x: 870, y: 315 };
+
+  for (const radius of [185, 310]) {
+    ctx.beginPath(); ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = radius === 185 ? "#ffffff25" : "#ffffff18";
+    ctx.lineWidth = 1; ctx.stroke();
+  }
+  for (let i = 0; i < 12; i++) {
+    const angle = -Math.PI / 2 + i * Math.PI / 6;
+    const inner = 314, outer = i % 3 === 0 ? 330 : 323;
+    ctx.beginPath();
+    ctx.moveTo(center.x + Math.cos(angle) * inner, center.y + Math.sin(angle) * inner);
+    ctx.lineTo(center.x + Math.cos(angle) * outer, center.y + Math.sin(angle) * outer);
+    ctx.strokeStyle = "#ffffff35"; ctx.lineWidth = i % 3 === 0 ? 2 : 1;
+    ctx.stroke();
+  }
+
+  const radii = { perfect: 205, great: 235, good: 265, miss: 295 };
+  const n = Math.max(1, history.length);
+  // Map duration → arc half-span. ~0.3s ≈ hold threshold, ~1s ≈ release threshold.
+  // Keep arcs from colliding too hard on dense charts.
+  const durationToHalfSpan = (duration, kind) => {
+    const d = Math.max(0, Number(duration) || 0);
+    if (kind === "tap" || d < 0.12) return 0;
+    // reference: 1s → ~0.14 rad half-span; clamp for readability
+    let half = 0.045 + d * 0.11;
+    if (kind === "trace") half = Math.min(half, 0.09);
+    if (kind === "hold") half = Math.min(Math.max(half, 0.07), 0.22);
+    if (kind === "release") half = Math.min(Math.max(half, 0.10), 0.32);
+    return half;
+  };
+
+  // Arcs first (under the point glyphs) so the judgment marks stay crisp.
+  history.forEach((event, index) => {
+    const key = String(event.judgment).toLowerCase();
+    const kind = String(event.kind || "tap").toLowerCase();
+    const half = durationToHalfSpan(event.duration, kind);
+    if (half <= 0) return;
+    const mid = -Math.PI / 2 + index * (Math.PI * 2 / n);
+    const radius = radii[key] || 140;
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, mid - half, mid + half);
+    ctx.strokeStyle = palette[key] || "#aab4b3";
+    ctx.globalAlpha = kind === "trace" ? 0.35 : 0.55;
+    ctx.lineWidth = kind === "release" ? 5.5 : kind === "hold" ? 4.5 : 3.2;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+
+  history.forEach((event, index) => {
+    const key = String(event.judgment).toLowerCase();
+    const kind = String(event.kind || "tap").toLowerCase();
+    const angle = -Math.PI / 2 + index * (Math.PI * 2 / n);
+    const radius = radii[key] || 140;
+    const x = center.x + Math.cos(angle) * radius;
+    const y = center.y + Math.sin(angle) * radius;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = palette[key] || "#aab4b3";
+    ctx.strokeStyle = ctx.fillStyle;
+
+    // Judgment glyph (same family as tip-tap). Long notes keep a smaller
+    // center mark so the arc carries most of the weight.
+    const long = kind === "hold" || kind === "release" || kind === "trace";
+    if (key === "perfect") {
+      const r = long ? 2.6 : 3.6;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+      if (!long) {
+        ctx.beginPath(); ctx.arc(0, 0, 6.4, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.32; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    } else if (key === "great") {
+      ctx.lineCap = "round"; ctx.lineWidth = long ? 2.6 : 3.5;
+      const s = long ? 3.5 : 5;
+      ctx.beginPath(); ctx.moveTo(-s, 0); ctx.lineTo(s, 0); ctx.stroke();
+    } else if (key === "good") {
+      const s = long ? 3.2 : 5;
+      ctx.beginPath();
+      ctx.moveTo(0, -s); ctx.lineTo(s * 0.8, 0);
+      ctx.lineTo(0, s); ctx.lineTo(-s * 0.8, 0);
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.lineCap = "round"; ctx.lineWidth = long ? 2.2 : 2.8;
+      const s = long ? 2.6 : 3.5;
+      ctx.beginPath(); ctx.moveTo(-s, -s); ctx.lineTo(s, s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(s, -s); ctx.lineTo(-s, s); ctx.stroke();
+    }
+    ctx.restore();
+  });
+
+  // Center rank badge.
+  ctx.beginPath(); ctx.arc(center.x, center.y, 155, 0, Math.PI * 2);
+  ctx.fillStyle = "#111820"; ctx.fill();
+  ctx.strokeStyle = "#ffffff30"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.textAlign = "center";
+  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.fillText("RANK", center.x, center.y - 77);
+  ctx.font = "900 160px system-ui, sans-serif"; ctx.fillStyle = accent;
+  ctx.fillText(grade, center.x, center.y + 58);
+  ctx.textAlign = "left";
+}
+
+function scoreCardFileName() {
+  return `flip-flap-notes-${new Date().toISOString().slice(0, 10)}.png`;
+}
+
+function downloadScoreCard(blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = scoreCardFileName(); link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.getElementById("btnSaveScore")?.addEventListener("click", () => {
+  const canvas = document.getElementById("scoreCardCanvas");
+  canvas?.toBlob((blob) => blob && downloadScoreCard(blob), "image/png");
+});
+
+document.getElementById("btnShareScore")?.addEventListener("click", () => {
+  const text = `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty}`;
+  const url =
+    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${
+      encodeURIComponent("https://marmooo.github.io/flip-flap-notes/")
+    }`;
+  globalThis.open(url, "_blank", "noopener,noreferrer");
+});
+
+
 
 // ---------------------------------------------------------------------------
 // Key hints
@@ -2614,6 +2829,7 @@ midy.addEventListener("stopped", () => {
 midy.addEventListener("seeked", () => {
   if (mode !== "midi" || gamePhase !== "playing") return;
   worker.postMessage({ type: "start" });
+  playHistory = [];
   lastResult = { ...lastResult, score: 0, combo: 0 };
   worker.postMessage({
     type: "tick",
@@ -2624,6 +2840,7 @@ midy.addEventListener("seeked", () => {
 midy.addEventListener("looped", () => {
   if (mode !== "midi") return;
   worker.postMessage({ type: "start" });
+  playHistory = [];
   lastResult = {
     score: 0,
     combo: 0,
@@ -2804,7 +3021,8 @@ function beginAudioRound() {
       clearTimeout(endingFadeTimeoutId);
       endingFadeTimeoutId = null;
     }
-    lastResult = {
+    playHistory = [];
+  lastResult = {
       score: 0,
       combo: 0,
       perfect: 0,

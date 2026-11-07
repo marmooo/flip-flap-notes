@@ -19,8 +19,16 @@ self.onmessage = (e) => {
         },
         msg.options ?? {},
       );
-      game.onJudgment = (judgment, combo, score) => {
-        self.postMessage({ type: "judgment", judgment, combo, score });
+      game.onJudgment = (judgment, combo, score, detail = {}) => {
+        self.postMessage({
+          type: "judgment",
+          judgment,
+          combo,
+          score,
+          lane: detail.lane,
+          kind: detail.kind,
+          duration: detail.duration,
+        });
       };
       game.onEnded = () => {
         // 詳細カウントを送ってから ended
