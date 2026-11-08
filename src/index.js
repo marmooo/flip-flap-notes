@@ -1173,25 +1173,38 @@ function drawScoreCard(grade, accuracy) {
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
   const palette = {
-    perfect: "#66b8ff", great: "#64d98b", good: "#ffd166", miss: "#ff5b61",
+    perfect: "#66b8ff",
+    great: "#64d98b",
+    good: "#ffd166",
+    miss: "#ff5b61",
   };
   const gradeColors = {
-    S: "#ffd166", A: "#64d98b", B: "#66b8ff", C: "#ff9a64", D: "#ff5b61",
+    S: "#ffd166",
+    A: "#64d98b",
+    B: "#66b8ff",
+    C: "#ff9a64",
+    D: "#ff5b61",
   };
   const accent = gradeColors[grade] || palette.perfect;
 
   // Background + soft accent glow (circular judgment signature on the right).
   const bg = ctx.createLinearGradient(0, 0, w, h);
-  bg.addColorStop(0, "#10151b"); bg.addColorStop(0.58, "#151d22");
+  bg.addColorStop(0, "#10151b");
+  bg.addColorStop(0.58, "#151d22");
   bg.addColorStop(1, "#0d1116");
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
   const glow = ctx.createRadialGradient(870, 315, 10, 870, 315, 560);
-  glow.addColorStop(0, "#66b8ff16"); glow.addColorStop(1, "#66b8ff00");
-  ctx.fillStyle = glow; ctx.fillRect(0, 0, w, h);
+  glow.addColorStop(0, "#66b8ff16");
+  glow.addColorStop(1, "#66b8ff00");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, h);
 
   // Product wordmark: Flip (neutral) Flap (accent) Notes.
   ctx.fillStyle = accent;
-  ctx.beginPath(); ctx.arc(66, 70, 10, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.arc(66, 70, 10, 0, Math.PI * 2);
+  ctx.fill();
   ctx.font = "800 64px system-ui, sans-serif";
   ctx.fillStyle = "#f5f4ec";
   ctx.fillText("Flip ", 88, 101);
@@ -1201,21 +1214,26 @@ function drawScoreCard(grade, accuracy) {
   const notesX = flapX + ctx.measureText("Flap ").width;
   ctx.fillStyle = "#f5f4ec";
   ctx.fillText("Notes", notesX, 101);
-  ctx.font = "600 24px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.font = "600 24px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
   ctx.fillText(`${config.difficulty}   ·   ${config.laneCount} LANES`, 88, 141);
 
   // Left column: score / accuracy / best combo / judgment counts.
   const history = playHistory.slice(-100);
-  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
   ctx.fillText("SCORE", 76, 190);
   ctx.font = "800 72px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#f5f4ec";
   ctx.fillText(String(lastResult.score).padStart(7, "0"), 72, 250);
-  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
   ctx.fillText("ACCURACY", 76, 310);
-  ctx.font = "800 68px system-ui, sans-serif"; ctx.fillStyle = "#f5f4ec";
+  ctx.font = "800 68px system-ui, sans-serif";
+  ctx.fillStyle = "#f5f4ec";
   ctx.fillText(`${accuracy}%`, 72, 370);
-  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
   ctx.fillText("BEST COMBO", 76, 430);
   ctx.font = "800 58px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#f5f4ec";
@@ -1228,7 +1246,8 @@ function drawScoreCard(grade, accuracy) {
   ];
   for (const [i, [label, value, color]] of stats.entries()) {
     const x = 76 + i * 103;
-    ctx.font = "700 20px system-ui, sans-serif"; ctx.fillStyle = color;
+    ctx.font = "700 20px system-ui, sans-serif";
+    ctx.fillStyle = color;
     ctx.fillText(label, x, 550);
     ctx.font = "800 30px system-ui, sans-serif";
     ctx.fillText(String(value), x, 580);
@@ -1240,17 +1259,26 @@ function drawScoreCard(grade, accuracy) {
   const center = { x: 870, y: 315 };
 
   for (const radius of [185, 310]) {
-    ctx.beginPath(); ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
     ctx.strokeStyle = radius === 185 ? "#ffffff25" : "#ffffff18";
-    ctx.lineWidth = 1; ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
   for (let i = 0; i < 12; i++) {
     const angle = -Math.PI / 2 + i * Math.PI / 6;
     const inner = 314, outer = i % 3 === 0 ? 330 : 323;
     ctx.beginPath();
-    ctx.moveTo(center.x + Math.cos(angle) * inner, center.y + Math.sin(angle) * inner);
-    ctx.lineTo(center.x + Math.cos(angle) * outer, center.y + Math.sin(angle) * outer);
-    ctx.strokeStyle = "#ffffff35"; ctx.lineWidth = i % 3 === 0 ? 2 : 1;
+    ctx.moveTo(
+      center.x + Math.cos(angle) * inner,
+      center.y + Math.sin(angle) * inner,
+    );
+    ctx.lineTo(
+      center.x + Math.cos(angle) * outer,
+      center.y + Math.sin(angle) * outer,
+    );
+    ctx.strokeStyle = "#ffffff35";
+    ctx.lineWidth = i % 3 === 0 ? 2 : 1;
     ctx.stroke();
   }
 
@@ -1305,39 +1333,64 @@ function drawScoreCard(grade, accuracy) {
     const long = kind === "hold" || kind === "release" || kind === "trace";
     if (key === "perfect") {
       const r = long ? 2.6 : 3.6;
-      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
       if (!long) {
-        ctx.beginPath(); ctx.arc(0, 0, 6.4, 0, Math.PI * 2);
-        ctx.globalAlpha = 0.32; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, 6.4, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.32;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
         ctx.globalAlpha = 1;
       }
     } else if (key === "great") {
-      ctx.lineCap = "round"; ctx.lineWidth = long ? 2.6 : 3.5;
+      ctx.lineCap = "round";
+      ctx.lineWidth = long ? 2.6 : 3.5;
       const s = long ? 3.5 : 5;
-      ctx.beginPath(); ctx.moveTo(-s, 0); ctx.lineTo(s, 0); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-s, 0);
+      ctx.lineTo(s, 0);
+      ctx.stroke();
     } else if (key === "good") {
       const s = long ? 3.2 : 5;
       ctx.beginPath();
-      ctx.moveTo(0, -s); ctx.lineTo(s * 0.8, 0);
-      ctx.lineTo(0, s); ctx.lineTo(-s * 0.8, 0);
-      ctx.closePath(); ctx.fill();
+      ctx.moveTo(0, -s);
+      ctx.lineTo(s * 0.8, 0);
+      ctx.lineTo(0, s);
+      ctx.lineTo(-s * 0.8, 0);
+      ctx.closePath();
+      ctx.fill();
     } else {
-      ctx.lineCap = "round"; ctx.lineWidth = long ? 2.2 : 2.8;
+      ctx.lineCap = "round";
+      ctx.lineWidth = long ? 2.2 : 2.8;
       const s = long ? 2.6 : 3.5;
-      ctx.beginPath(); ctx.moveTo(-s, -s); ctx.lineTo(s, s); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(s, -s); ctx.lineTo(-s, s); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-s, -s);
+      ctx.lineTo(s, s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(s, -s);
+      ctx.lineTo(-s, s);
+      ctx.stroke();
     }
     ctx.restore();
   });
 
   // Center rank badge.
-  ctx.beginPath(); ctx.arc(center.x, center.y, 155, 0, Math.PI * 2);
-  ctx.fillStyle = "#111820"; ctx.fill();
-  ctx.strokeStyle = "#ffffff30"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, 155, 0, Math.PI * 2);
+  ctx.fillStyle = "#111820";
+  ctx.fill();
+  ctx.strokeStyle = "#ffffff30";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
   ctx.textAlign = "center";
-  ctx.font = "700 22px system-ui, sans-serif"; ctx.fillStyle = "#aab5b5";
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
   ctx.fillText("RANK", center.x, center.y - 77);
-  ctx.font = "900 160px system-ui, sans-serif"; ctx.fillStyle = accent;
+  ctx.font = "900 160px system-ui, sans-serif";
+  ctx.fillStyle = accent;
   ctx.fillText(grade, center.x, center.y + 58);
   ctx.textAlign = "left";
 }
@@ -1349,7 +1402,9 @@ function scoreCardFileName() {
 function downloadScoreCard(blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url; link.download = scoreCardFileName(); link.click();
+  link.href = url;
+  link.download = scoreCardFileName();
+  link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
@@ -1359,15 +1414,13 @@ document.getElementById("btnSaveScore")?.addEventListener("click", () => {
 });
 
 document.getElementById("btnShareScore")?.addEventListener("click", () => {
-  const text = `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty}`;
-  const url =
-    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${
-      encodeURIComponent("https://marmooo.github.io/flip-flap-notes/")
-    }`;
+  const text =
+    `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty}`;
+  const url = `https://twitter.com/intent/tweet?text=${
+    encodeURIComponent(text)
+  }&url=${encodeURIComponent("https://marmooo.github.io/flip-flap-notes/")}`;
   globalThis.open(url, "_blank", "noopener,noreferrer");
 });
-
-
 
 // ---------------------------------------------------------------------------
 // Key hints
@@ -2494,30 +2547,48 @@ function trackMetaFromLibraryRow(row) {
   return { title, composer, siteName, web, license };
 }
 
-/** ?q= で渡された MIDI の URL と、title / composer / maintainer / web / license を曲情報にする */
-function trackMetaFromQuery(query) {
-  return {
-    title: query.get("title") ?? "",
-    composer: query.get("composer") ?? "",
-    siteName: query.get("maintainer") ?? "",
-    web: query.get("web") ?? "",
-    license: query.get("license") ?? "",
-  };
-}
-
+/**
+ * ?c=<siteId>&i=<index>（classical は &db=c）から曲を読み込む。
+ * free-midi からの共有リンク専用（旧 ?q= は廃止）。
+ */
 async function loadMIDIFromQuery() {
   const query = new URLSearchParams(location.search);
-  const url = query.get("q");
-  if (!url) return;
+  const collectionId = query.get("c");
+  const index = Number.parseInt(query.get("i") ?? "", 10);
+  if (!collectionId || !Number.isInteger(index) || index < 0) return;
+
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
+    const dbBase = query.get("db") === "c" ? MIDI_DB_CLASSICAL : MIDI_DB_MODERN;
+    const lang = ["ja", "en"].includes(htmlLang) ? htmlLang : "en";
+    const listUrl = `${dbBase}/json/${
+      encodeURIComponent(collectionId)
+    }/${lang}.json`;
+    const list = await (await fetch(listUrl)).json();
+    const row = list[index];
+    if (!row?.file) {
+      throw new Error(`MIDI not found: ${collectionId}#${index}`);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    await loadMIDIBytes(bytes, trackMetaFromQuery(query));
+
+    const col = midiLibrary.collections?.get(collectionId);
+    if (col) {
+      if (!row.collection) row.collection = col.name;
+      if (!row.composer && col.composer) row.composer = col.composer;
+      if (!row.web && col.web) row.web = col.web;
+      if (!row.license && col.license) row.license = col.license;
+    }
+    row.collectionId = collectionId;
+    row.index = index;
+
+    if (dbBase !== midiLibrary.midiDB) {
+      currentMidiDb = dbBase;
+      midiLibrary.midiDB = dbBase;
+    }
+
+    const midiUrl = `${dbBase}/${row.file}`;
+    const buf = await (await fetch(midiUrl)).arrayBuffer();
+    await loadMIDIBytes(new Uint8Array(buf), trackMetaFromLibraryRow(row));
   } catch (error) {
-    console.error(`Failed to load ${url}:`, error);
+    console.error("Failed to load MIDI from query:", error);
     alert(t("midiFromQueryFailedPrefix") + (error?.message || error));
   }
 }
@@ -3022,7 +3093,7 @@ function beginAudioRound() {
       endingFadeTimeoutId = null;
     }
     playHistory = [];
-  lastResult = {
+    lastResult = {
       score: 0,
       combo: 0,
       perfect: 0,
