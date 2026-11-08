@@ -1222,22 +1222,22 @@ function drawScoreCard(grade, accuracy) {
   const history = playHistory.slice(-100);
   ctx.font = "700 22px system-ui, sans-serif";
   ctx.fillStyle = "#aab5b5";
-  ctx.fillText("SCORE", 76, 190);
-  ctx.font = "800 72px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.fillStyle = "#f5f4ec";
-  ctx.fillText(String(lastResult.score).padStart(7, "0"), 72, 250);
-  ctx.font = "700 22px system-ui, sans-serif";
-  ctx.fillStyle = "#aab5b5";
-  ctx.fillText("ACCURACY", 76, 310);
-  ctx.font = "800 68px system-ui, sans-serif";
-  ctx.fillStyle = "#f5f4ec";
-  ctx.fillText(`${accuracy}%`, 72, 370);
-  ctx.font = "700 22px system-ui, sans-serif";
-  ctx.fillStyle = "#aab5b5";
-  ctx.fillText("BEST COMBO", 76, 430);
+  ctx.fillText("SCORE", 76, 184);
   ctx.font = "800 58px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#f5f4ec";
-  ctx.fillText(String(lastResult.combo), 72, 490);
+  ctx.fillText(String(lastResult.score).padStart(7, "0"), 72, 236);
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
+  ctx.fillText("ACCURACY", 76, 287);
+  ctx.font = "800 58px system-ui, sans-serif";
+  ctx.fillStyle = "#f5f4ec";
+  ctx.fillText(`${accuracy}%`, 72, 340);
+  ctx.font = "700 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
+  ctx.fillText("BEST COMBO", 76, 391);
+  ctx.font = "800 58px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "#f5f4ec";
+  ctx.fillText(String(lastResult.combo), 72, 444);
   const stats = [
     ["PERFECT", lastResult.perfect, palette.perfect],
     ["GREAT", lastResult.great, palette.great],
@@ -1248,9 +1248,9 @@ function drawScoreCard(grade, accuracy) {
     const x = 76 + i * 103;
     ctx.font = "700 20px system-ui, sans-serif";
     ctx.fillStyle = color;
-    ctx.fillText(label, x, 550);
+    ctx.fillText(label, x, 500);
     ctx.font = "800 30px system-ui, sans-serif";
-    ctx.fillText(String(value), x, 580);
+    ctx.fillText(String(value), x, 530);
   }
 
   // Halo: chronological ring.
@@ -1393,6 +1393,73 @@ function drawScoreCard(grade, accuracy) {
   ctx.fillStyle = accent;
   ctx.fillText(grade, center.x, center.y + 58);
   ctx.textAlign = "left";
+
+  // 曲名 · サイト名（左下・幅内折り返し）
+  ctx.font = "600 22px system-ui, sans-serif";
+  ctx.fillStyle = "#aab5b5";
+  drawWrappedTrackLabel(ctx, 72, h - 56, Math.min(560, w * 0.48), 24, 2);
+  ctx.textAlign = "left";
+}
+
+/** 指定幅に収まるよう省略（…）付きで返す */
+function fitTextToWidth(ctx, text, maxWidth) {
+  if (!text) return "";
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const ell = "…";
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (ctx.measureText(text.slice(0, mid) + ell).width <= maxWidth) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo <= 0 ? ell : text.slice(0, lo) + ell;
+}
+
+/**
+ * 曲名 · サイト名を maxWidth 内に折り返し配置する。
+ * 最大 maxLines 行。最終行のみ必要なら省略。
+ * @returns {number} 使った行数
+ */
+function drawWrappedTrackLabel(ctx, x, y, maxWidth, lineHeight, maxLines = 2) {
+  const meta = currentTrackMeta;
+  if (!meta) return 0;
+  const title = (meta.title || "").trim();
+  const site = (meta.siteName || "").trim();
+  if (!title && !site) return 0;
+
+  const full = title && site ? `${title} · ${site}` : (title || site);
+  // 文字単位で折り返し（日英混在の長いタイトル向け）
+  const lines = [];
+  let rest = full;
+  while (rest && lines.length < maxLines) {
+    if (ctx.measureText(rest).width <= maxWidth) {
+      lines.push(rest);
+      rest = "";
+      break;
+    }
+    let lo = 1;
+    let hi = rest.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (ctx.measureText(rest.slice(0, mid)).width <= maxWidth) lo = mid;
+      else hi = mid - 1;
+    }
+    if (lo <= 0) lo = 1;
+    if (lines.length === maxLines - 1 && lo < rest.length) {
+      lines.push(fitTextToWidth(ctx, rest, maxWidth));
+      rest = "";
+      break;
+    }
+    lines.push(rest.slice(0, lo));
+    rest = rest.slice(lo);
+  }
+
+  ctx.textAlign = "left";
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], x, y + i * lineHeight);
+  }
+  return lines.length;
 }
 
 function scoreCardFileName() {
