@@ -1527,7 +1527,7 @@ document.getElementById("btnShareScore")?.addEventListener("click", () => {
   const shareUrl = getShareUrl();
   const track = formatTrackShareLabel(48);
   const text = track
-    ? `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty} · ${track}`
+    ? `Flip Flap Notes: ${lastResult.score} points · ${track} · ${config.difficulty}`
     : `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty}`;
   const textForX = text.replaceAll("@", "@\u200B");
   const url = `https://twitter.com/intent/tweet?text=${
@@ -1889,6 +1889,7 @@ function goToStartScreen() {
   if (gamePhase === "playing") stopRaf();
   stopAllPlayback();
   clearTrackMeta();
+  clearLibraryUrl();
   showScreen("start");
 }
 document.getElementById("btnChangeFileReady").addEventListener(
