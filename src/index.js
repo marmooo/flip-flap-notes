@@ -937,6 +937,7 @@ function applyConfigToGame(cfg) {
       JSON.stringify(config.laneKeys?.slice(0, config.laneCount));
 
   config = cfg;
+  if (laneOrDiffChanged) updateDocumentTitle();
   // maxPixelRatio 変更時は実効 dpr を更新（構造変更時は後続の buildGame で反映）
   if (dprChanged) dpr = computeDpr();
   // MIDI サンプルキャッシュ粒度（再生中でも次回ボイス生成から効く）
@@ -1480,12 +1481,43 @@ document.getElementById("btnSaveScore")?.addEventListener("click", () => {
   canvas?.toBlob((blob) => blob && downloadScoreCard(blob), "image/png");
 });
 
+function formatTrackShareLabel(maxChars = 48) {
+  const meta = currentTrackMeta;
+  if (!meta) return "";
+  const title = (meta.title || "").trim();
+  const site = (meta.siteName || "").trim();
+  if (!title && !site) return "";
+  let t = title;
+  if (t.length > maxChars) t = t.slice(0, maxChars - 1) + "…";
+  if (t && site) return `${t} · ${site}`;
+  return t || site;
+}
+
+/** タブタイトル: アプリ名固定 + 曲情報 + 難易度（pick-pack と同じ方針） */
+function updateDocumentTitle() {
+  const meta = currentTrackMeta;
+  const title = (meta?.title || "").trim();
+  const site = (meta?.siteName || "").trim();
+  const diff = config.difficulty || "NORMAL";
+  const parts = [];
+  if (title) parts.push(title);
+  if (site) parts.push(site);
+  if (parts.length > 0) {
+    document.title = `Flip Flap Notes: ${parts.join(" · ")} · ${diff}`;
+  } else {
+    document.title = "Flip Flap Notes";
+  }
+}
+
 document.getElementById("btnShareScore")?.addEventListener("click", () => {
   const shareUrl = getShareUrl();
-  const text =
-    `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty}`;
+  const track = formatTrackShareLabel(48);
+  const text = track
+    ? `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty} · ${track}`
+    : `Flip Flap Notes: ${lastResult.score} points · ${config.difficulty}`;
+  const textForX = text.replaceAll("@", "@\u200B");
   const url = `https://twitter.com/intent/tweet?text=${
-    encodeURIComponent(text)
+    encodeURIComponent(textForX)
   }&url=${encodeURIComponent(shareUrl)}`;
   globalThis.open(url, "_blank", "noopener,noreferrer");
 });
@@ -2705,6 +2737,7 @@ async function loadMIDIFromQuery() {
 function clearTrackMeta() {
   currentTrackMeta = null;
   updateTrackAttributionUI();
+  updateDocumentTitle();
 }
 
 function setTrackMeta(meta) {
@@ -2719,6 +2752,7 @@ function setTrackMeta(meta) {
     }
     : null;
   updateTrackAttributionUI();
+  updateDocumentTitle();
 }
 
 function updateTrackAttributionUI() {
