@@ -1957,7 +1957,111 @@ export class RhythmGame {
           : isTrace
           ? TRACE_OPACITY
           : 1;
-        drawTrap(laneIdx, drawTop, drawBot, bodyColor, baseAlpha * 0.55, r);
+        if (isTrace) {
+          // 通常時と同じ細い形状を維持する（幅が変わって見えないようにする）
+          const narrowPad = pad + Math.max(2 * d, laneW * 0.12);
+          const scB = this.#perspScale(drawBot, hitY, p);
+          const scT = this.#perspScale(drawTop, hitY, p);
+          const xBL =
+            this.#perspX(laneIdx, laneW, cW, drawBot, hitY, p, btnBot) +
+            narrowPad * scB;
+          const xBR =
+            this.#perspX(laneIdx + 1, laneW, cW, drawBot, hitY, p, btnBot) -
+            narrowPad * scB;
+          const xTL =
+            this.#perspX(laneIdx, laneW, cW, drawTop, hitY, p, btnBot) +
+            narrowPad * scT;
+          const xTR =
+            this.#perspX(laneIdx + 1, laneW, cW, drawTop, hitY, p, btnBot) -
+            narrowPad * scT;
+          if (xBR > xBL && xTR > xTL) {
+            ctx.globalAlpha = baseAlpha * 0.55;
+            ctx.fillStyle = bodyColor;
+            if (!p) {
+              const h = drawBot - drawTop;
+              ctx.beginPath();
+              ctx.roundRect(
+                xBL,
+                drawTop,
+                xBR - xBL,
+                h,
+                Math.min(4 * d, (xBR - xBL) / 2, h / 2),
+              );
+              ctx.fill();
+            } else {
+              ctx.beginPath();
+              ctx.moveTo(xBL, drawBot);
+              ctx.lineTo(xBR, drawBot);
+              ctx.lineTo(xTR, drawTop);
+              ctx.lineTo(xTL, drawTop);
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+          // miss 後も次トレースへの連結帯を残す（ストリームが分断されないように）
+          if (note.streamNext >= 0) {
+            const next = notes[note.streamNext];
+            if (next && !next.hit) {
+              const nextYBot = hitY - (next.startTime - t) * speed;
+              const linkTop = Math.max(0, nextYBot - traceH * 0.5);
+              const linkBot = Math.min(H, drawTop);
+              if (linkBot > linkTop) {
+                const linkPad = pad + Math.max(4 * d, laneW * 0.22);
+                const scLB = this.#perspScale(linkBot, hitY, p);
+                const scLT = this.#perspScale(linkTop, hitY, p);
+                const lxBL =
+                  this.#perspX(laneIdx, laneW, cW, linkBot, hitY, p, btnBot) +
+                  linkPad * scLB;
+                const lxBR = this.#perspX(
+                  laneIdx + 1,
+                  laneW,
+                  cW,
+                  linkBot,
+                  hitY,
+                  p,
+                  btnBot,
+                ) -
+                  linkPad * scLB;
+                const lxTL =
+                  this.#perspX(laneIdx, laneW, cW, linkTop, hitY, p, btnBot) +
+                  linkPad * scLT;
+                const lxTR = this.#perspX(
+                  laneIdx + 1,
+                  laneW,
+                  cW,
+                  linkTop,
+                  hitY,
+                  p,
+                  btnBot,
+                ) -
+                  linkPad * scLT;
+                if (lxBR > lxBL && lxTR > lxTL) {
+                  ctx.globalAlpha = TRACE_OPACITY * 0.30;
+                  ctx.fillStyle = bodyColor;
+                  ctx.beginPath();
+                  if (!p) {
+                    ctx.roundRect(
+                      lxBL,
+                      linkTop,
+                      lxBR - lxBL,
+                      linkBot - linkTop,
+                      Math.min(3 * d, (lxBR - lxBL) / 2),
+                    );
+                  } else {
+                    ctx.moveTo(lxBL, linkBot);
+                    ctx.lineTo(lxBR, linkBot);
+                    ctx.lineTo(lxTR, linkTop);
+                    ctx.lineTo(lxTL, linkTop);
+                    ctx.closePath();
+                  }
+                  ctx.fill();
+                }
+              }
+            }
+          }
+        } else {
+          drawTrap(laneIdx, drawTop, drawBot, bodyColor, baseAlpha * 0.55, r);
+        }
         continue;
       }
 
@@ -2062,14 +2166,15 @@ export class RhythmGame {
           drawTrapNarrow(tapTop, tapBot, bodyColor, TRACE_OPACITY);
 
           // 次のトレースまで細い連結帯を伸ばす（ノート同士がくっついて見える）
+          // miss 後も帯を残してストリームが分断されないようにする（hit 済みのみ非表示）
           if (note.streamNext >= 0) {
             const next = notes[note.streamNext];
-            if (next && !next.hit && !next.missed) {
+            if (next && !next.hit) {
               const nextYBot = hitY - (next.startTime - t) * speed;
               const linkTop = Math.max(0, nextYBot - traceH * 0.5);
               const linkBot = Math.min(hitY, tapTop);
               if (linkBot > linkTop) {
-                // 連結帯はさらに細く・半透明
+                // 連結帯はさらに細く・半透明（次が miss ならさらに薄く）
                 const linkPad = pad + Math.max(4 * d, laneW * 0.22);
                 const scB = this.#perspScale(linkBot, hitY, p);
                 const scT = this.#perspScale(linkTop, hitY, p);
@@ -2098,7 +2203,7 @@ export class RhythmGame {
                   btnBot,
                 ) - linkPad * scT;
                 if (xBR > xBL && xTR > xTL) {
-                  ctx.globalAlpha = TRACE_OPACITY * 0.55;
+                  ctx.globalAlpha = TRACE_OPACITY * (next.missed ? 0.30 : 0.55);
                   ctx.fillStyle = bodyColor;
                   ctx.beginPath();
                   if (!p) {
