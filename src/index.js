@@ -2771,7 +2771,10 @@ function trackMetaFromLibraryRow(row) {
   const collectionId = String(row.file || "").split("/")[0] || "";
   const col = collectionId ? midiLibrary.collections.get(collectionId) : null;
   const web = row.web || col?.web || "";
-  const siteName = row.collection || col?.name || collectionId || "";
+  // Prefer collections.json `name` (display name) over row.collection / id.
+  // Share-link loads may have no row.collection and an empty collections Map;
+  // callers that need the proper name should ensure collections are available.
+  const siteName = col?.name || row.collection || collectionId || "";
   const license = row.license || col?.license || "";
   const title = row.title || "";
   const composer = row.composer || col?.composer || "";
@@ -2810,7 +2813,19 @@ async function loadMIDIFromQuery() {
       throw new Error(`MIDI not found: ${collectionId}#${index}`);
     }
 
-    const col = midiLibrary.collections?.get(collectionId);
+    // Share links intentionally skip full playlist load, but we still need
+    // collections.json so the score card / attribution can show the display
+    // name (e.g. "般若's MIDIの里") instead of the URL id ("般若sMIDIの里").
+    if (!midiLibrary.collections.has(collectionId)) {
+      try {
+        const cols = await (await fetch(`${dbBase}/collections.json`)).json();
+        for (const c of cols) midiLibrary.collections.set(c.id, c);
+      } catch (err) {
+        console.warn("Failed to load collections for share link meta:", err);
+      }
+    }
+
+    const col = midiLibrary.collections.get(collectionId);
     if (col) {
       if (!row.collection) row.collection = col.name;
       if (!row.composer && col.composer) row.composer = col.composer;
